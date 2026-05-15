@@ -4,6 +4,8 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import Evidence, { CardData } from './Evidence'
 import BoardCard, { BoardCardData, StatusType } from './BoardCard'
 import Newspaper from './Newspaper'
+import AddressBook from './AddressBook'
+import Journal, { JournalEntry } from './Journal'
 
 interface LocationPin {
   id: string
@@ -94,8 +96,8 @@ const SAMPLE_LOCATIONS: LocationPin[] = [
 ]
 
 export default function Board() {
-  const [activeTab, setActiveTab] = useState<'board' | 'newspaper'>('board')
-  const [boardCards, setBoardCards] = useState<Record<string, BoardCardData>>({})
+const [activeTab, setActiveTab] = useState<'board' | 'address-book' | 'journal' | 'newspaper'>('board')
+const [boardCards, setBoardCards] = useState<Record<string, BoardCardData>>({})
   const [strings, setStrings] = useState<StringData[]>([])
   const [locations, setLocations] = useState<LocationPin[]>(SAMPLE_LOCATIONS)
   const [connectingFrom, setConnectingFrom] = useState<string | null>(null)
@@ -105,6 +107,8 @@ export default function Board() {
   const [modal, setModal] = useState<ModalData | null>(null)
   const [doc, setDoc] = useState<DocData | null>(null)
   const [timerSecs, setTimerSecs] = useState(3 * 60 * 60)
+const [journalEntries, setJournalEntries] = useState<JournalEntry[]>([])
+const [visitCount, setVisitCount] = useState(0)
 
   const boardRef = useRef<HTMLDivElement>(null)
   const ghostRef = useRef<HTMLDivElement | null>(null)
@@ -228,8 +232,7 @@ export default function Board() {
   const boardCardIds = new Set(Object.keys(boardCards))
   const availableStringTypes = connectingFrom ? STRING_TYPES[boardCards[connectingFrom]?.type] || [] : []
 
-  const tabBtn = (tab: 'board' | 'newspaper', label: string) => (
-    <button key={tab} onClick={() => setActiveTab(tab)} style={{
+const tabBtn = (tab: 'board' | 'address-book' | 'journal' | 'newspaper', label: string) => (    <button key={tab} onClick={() => setActiveTab(tab)} style={{
       fontFamily: 'Courier Prime, monospace',
       fontSize: 10, letterSpacing: 1, textTransform: 'uppercase',
       padding: '5px 14px',
@@ -252,11 +255,13 @@ export default function Board() {
         <div style={{ fontFamily: 'Special Elite, cursive', color: 'var(--gold)', fontSize: 19, letterSpacing: 3 }}>
           The Casebook
         </div>
-        <div style={{ fontSize: 11, color: '#5a4a2a', letterSpacing: 2 }}>
-          CASE NO. 001 - THE NEPTUNE AFFAIR - 1924
-        </div>
+       <div style={{ fontSize: 12, color: '#ffffff', letterSpacing: 2, fontFamily: 'Courier Prime, monospace' }}>
+  CASE NO. 001 - THE NEPTUNE AFFAIR - 1924
+</div>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           {tabBtn('board', 'Board')}
+          {tabBtn('address-book', 'Address Book')}
+          {tabBtn('journal', 'Journal')}
           {tabBtn('newspaper', 'Newspaper')}
           <div style={{ width: 1, height: 20, background: '#3a2a10', margin: '0 4px' }} />
           <button onClick={addHypothesis} style={topBtnStyle}>+ Hypothesis</button>
@@ -389,6 +394,37 @@ export default function Board() {
             </div>
           </div>
 
+          {/* Address Book tab */}
+{/* Address Book tab */}
+<div style={{ display: activeTab === 'address-book' ? 'flex' : 'none', width: '100%', height: '100%' }}>
+  <AddressBook />
+</div>
+
+{/* Journal tab */}
+<div style={{ display: activeTab === 'journal' ? 'flex' : 'none', width: '100%', height: '100%' }}>
+  <Journal
+    entries={journalEntries}
+    timeRemaining={timerSecs}
+    onVisit={(entry) => {
+      const n = visitCount + 1
+      setVisitCount(n)
+      setTimerSecs(s => Math.max(0, s - 10 * 60))
+      const je: JournalEntry = {
+        id: entry.id + '-' + Date.now(),
+        entryNumber: n,
+        locationId: entry.id,
+        locationName: entry.name,
+        address: entry.address,
+        sceneText: 'You arrive at ' + entry.name + '. The place is quiet. You look around carefully but find nothing of immediate interest.',
+        hasClue: false,
+        costMinutes: 10,
+        timestamp: new Date(),
+      }
+      setJournalEntries(prev => [...prev, je])
+      return je
+    }}
+  />
+</div>
           {/* Newspaper tab */}
           <div style={{ display: activeTab === 'newspaper' ? 'flex' : 'none', width: '100%', height: '100%' }}>
             <Newspaper pdfUrl={NEWSPAPER_URL} title="Daily Pines - Vol. 10, No. 4" />
@@ -398,15 +434,13 @@ export default function Board() {
       </div>
 
       {/* Status bar */}
-      <div style={{ background: 'var(--sidebar)', borderTop: '1px solid var(--sidebar-border)', padding: '4px 16px', display: 'flex', gap: 20, flexShrink: 0 }}>
-        {[
+<div style={{ background: 'var(--sidebar)', borderTop: '1px solid #3a2a10', padding: '6px 20px', display: 'flex', gap: 24, flexShrink: 0, alignItems: 'center' }}>        {[
           ['Cards on board', Object.keys(boardCards).length],
           ['Connections', strings.length],
           ['Time remaining', formatTime(timerSecs)],
           ['Moves used', movesUsed],
         ].map(([label, val]) => (
-          <div key={label as string} style={{ fontSize: 9, color: '#3a2a10', letterSpacing: 1, textTransform: 'uppercase' }}>
-            {label}: <span style={{ color: 'var(--gold)' }}>{val}</span>
+<div key={label as string} style={{ fontSize: 12, color: '#8a7a5a', letterSpacing: 1, textTransform: 'uppercase', fontFamily: 'Courier Prime, monospace' }}>            {label}: <span style={{ color: 'var(--gold)' }}>{val}</span>
           </div>
         ))}
       </div>
