@@ -36,9 +36,6 @@ export default function Journal({ entries, onVisit, timeRemaining }: JournalProp
   const [error, setError] = useState('')
 
   async function handleGo() {
-    // Guard: не пускать если время вышло или уже идёт визит
-    if (visiting || timeRemaining <= 0) return
-
     const trimmed = code.trim()
     if (!trimmed) return
 
@@ -50,28 +47,23 @@ export default function Journal({ entries, onVisit, timeRemaining }: JournalProp
     setVisiting(true)
 
     try {
-      // ── 1. Найти локацию ────────────────────────────────────────────────────
       let locationData: any = null
-
       if (visitType === 'visit') {
-        const { data, error: locErr } = await supabase
+        const { data } = await supabase
           .from('locations')
           .select('*')
-          .eq('code', parseInt(trimmed, 10))
-          .maybeSingle()
-        if (locErr) console.error('Location lookup by code failed:', locErr)
+          .eq('code', parseInt(trimmed))
+          .single()
         locationData = data
       } else {
-        const { data, error: locErr } = await supabase
+        const { data } = await supabase
           .from('locations')
           .select('*')
           .eq('phone', trimmed)
-          .maybeSingle()
-        if (locErr) console.error('Location lookup by phone failed:', locErr)
+          .single()
         locationData = data
       }
 
-      // ── 2. Локация не найдена в базе ────────────────────────────────────────
       if (!locationData) {
         const entry: JournalEntry = {
           id: 'unknown-' + Date.now(),
@@ -80,8 +72,6 @@ export default function Journal({ entries, onVisit, timeRemaining }: JournalProp
           locationName: visitType === 'visit' ? `Address ${trimmed}` : `Number ${trimmed}`,
           address: trimmed,
           visitType,
-          code: visitType === 'visit' ? parseInt(trimmed, 10) : undefined,
-          phone: visitType === 'call' ? trimmed : undefined,
           sceneText: visitType === 'visit'
             ? 'You arrived, but found nothing of interest.'
             : 'No one answered.',
@@ -95,15 +85,12 @@ export default function Journal({ entries, onVisit, timeRemaining }: JournalProp
         return
       }
 
-      // ── 3. Проверить активна ли локация в этом кейсе ───────────────────────
-      const { data: caseLocData, error: caseLocErr } = await supabase
+      const { data: caseLocData } = await supabase
         .from('case_locations')
         .select('is_active, scene_text')
         .eq('case_id', CASE_ID)
         .eq('location_id', locationData.id)
-        .maybeSingle()
-
-      if (caseLocErr) console.error('Case location lookup failed:', caseLocErr)
+        .single()
 
       if (!caseLocData || !caseLocData.is_active) {
         const entry: JournalEntry = {
@@ -128,32 +115,26 @@ export default function Journal({ entries, onVisit, timeRemaining }: JournalProp
         return
       }
 
-      // ── 4. Найти персонажа в локации ───────────────────────────────────────
-      const { data: charData, error: charErr } = await supabase
+      const { data: charData } = await supabase
         .from('case_characters')
         .select('*, characters(name, photo_url, occupation)')
         .eq('case_id', CASE_ID)
         .eq('current_location_id', locationData.id)
         .eq('is_active', true)
-        .maybeSingle()
+        .single()
 
-      if (charErr) console.error('Character lookup failed:', charErr)
-
-      // ── 5. Найти улику в локации (только при визите) ────────────────────────
       let clueData: any = null
       if (visitType === 'visit') {
-const { data } = await supabase
-  .from('case_clues')
-  .select('*')
-  .eq('case_id', CASE_ID)
-  .eq('found_at_location_id', locationData.id)
-  .maybeSingle()
-clueData = data
+        const { data } = await supabase
+          .from('case_clues')
+          .select('*')
+          .eq('case_id', CASE_ID)
+          .eq('found_at_location_id', locationData.id)
+          .single()
+        clueData = data
       }
 
-      // ── 6. Собрать текст сцены ─────────────────────────────────────────────
       let sceneText = 'You arrived, but found nothing of interest.'
-
       if (visitType === 'visit') {
         if (charData?.visit_text) {
           sceneText = charData.visit_text
@@ -170,7 +151,6 @@ clueData = data
         }
       }
 
-      // ── 7. Собрать запись журнала ──────────────────────────────────────────
       const entry: JournalEntry = {
         id: locationData.id + '-' + Date.now(),
         entryNumber: entries.length + 1,
@@ -192,9 +172,8 @@ clueData = data
 
       onVisit(entry)
       setCode('')
-
     } catch (err) {
-      console.error('handleGo error:', err)
+      console.error(err)
       setError('Something went wrong. Try again.')
     }
 
@@ -333,7 +312,7 @@ clueData = data
               padding: '10px 16px 10px 20px',
               display: 'flex', alignItems: 'center', gap: 10,
             }}>
-              {/* Badge */}
+              {/* Badge: Visit 203 / Call 5-0001 */}
               <div style={{
                 fontFamily: 'Cocomat, sans-serif', fontWeight: 300,
                 fontSize: 9, letterSpacing: 2, textTransform: 'uppercase',
@@ -341,31 +320,28 @@ clueData = data
                 border: `1px solid ${entry.visitType === 'visit' ? '#b8860b' : '#4a9ada'}`,
                 color: entry.visitType === 'visit' ? '#b8860b' : '#4a9ada',
               }}>
-                {entry.visitType === 'visit' ? 'Visit' : 'Call'}
+{entry.visitType === 'visit' ? 'Visit' : 'Call'}
               </div>
 
-              {/* Code/phone — Location — Character */}
+              {/* Location — Character */}
               <div style={{
                 fontFamily: 'Remington, monospace',
                 color: '#e8dfc4', fontSize: 14, letterSpacing: 1,
               }}>
-                {entry.visitType === 'visit'
-                  ? (entry.code ?? entry.address ?? '')
-                  : (entry.phone ?? entry.address ?? '')
-                } — {entry.locationName}{entry.characterName ? ` — ${entry.characterName}` : ''}
+{entry.visitType === 'visit' ? `${entry.code}` : `${entry.phone}`} — {entry.locationName}{entry.characterName ? ` — ${entry.characterName}` : ''}
               </div>
 
               {/* Cost */}
               <div style={{
                 marginLeft: 'auto', flexShrink: 0,
                 fontFamily: 'Cocomat, sans-serif', fontWeight: 200,
-                fontSize: 10, color: '#5a4a2a', letterSpacing: 2,
+                fontSize: 10, color: '#3a2a10', letterSpacing: 2,
               }}>
                 −{entry.costMinutes} min
               </div>
             </div>
 
-            {/* Scene text */}
+            {/* Scene text with optional photo */}
             <div style={{ padding: '14px 16px 14px 20px', overflow: 'hidden' }}>
               {entry.visitType === 'visit' && entry.characterPhoto && (
                 <img

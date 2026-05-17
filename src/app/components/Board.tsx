@@ -9,6 +9,7 @@ import Journal, { JournalEntry } from './Journal'
 import { supabase } from '@/lib/supabase'
 
 const CASE_ID = '9449b4d3-8567-42c9-b376-e3a260f15498'
+const NEWSPAPER_URL = 'https://cgpeozfkxrdqtqmbrcnh.supabase.co/storage/v1/object/public/newspaper/newspaper_test.pdf'
 
 interface LocationPin {
   id: string
@@ -32,6 +33,13 @@ interface ModalData {
 interface DocData {
   title: string
   url: string
+}
+
+interface TeamData {
+  id: string
+  name: string
+  code: string
+  event_id: string
 }
 
 const STRING_TYPES: Record<string, string[]> = {
@@ -61,154 +69,300 @@ const STRING_COLORS: Record<string, string> = {
   'based-on':    '#30c0c0',
 }
 
-const NEWSPAPER_URL = 'https://cgpeozfkxrdqtqmbrcnh.supabase.co/storage/v1/object/public/newspaper/newspaper_test.pdf'
+function getTeam(): TeamData | null {
+  try {
+    const raw = localStorage.getItem('team')
+    return raw ? JSON.parse(raw) : null
+  } catch {
+    return null
+  }
+}
 
 export default function Board() {
   const [activeTab, setActiveTab] = useState<'board' | 'investigation' | 'address-book' | 'newspaper'>('investigation')
+  const [loading, setLoading] = useState(true)
+  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'unsaved'>('saved')
+  const [team, setTeam] = useState<TeamData | null>(null)
+
   const [boardCards, setBoardCards] = useState<Record<string, BoardCardData>>({})
   const [strings, setStrings] = useState<StringData[]>([])
-  const [locations, setLocations] = useState<LocationPin[]>([])
   const [availableCards, setAvailableCards] = useState<CardData[]>([])
-  const [connectingFrom, setConnectingFrom] = useState<string | null>(null)
-  const [stringType, setStringType] = useState<string>('knows')
+  const [journalEntries, setJournalEntries] = useState<JournalEntry[]>([])
+  const [locations, setLocations] = useState<LocationPin[]>([])
+  const [timerSecs, setTimerSecs] = useState(3 * 60 * 60)
   const [hypothesisCount, setHypothesisCount] = useState(0)
   const [movesUsed, setMovesUsed] = useState(0)
+
+  const [connectingFrom, setConnectingFrom] = useState<string | null>(null)
+  const [stringType, setStringType] = useState<string>('knows')
   const [modal, setModal] = useState<ModalData | null>(null)
   const [doc, setDoc] = useState<DocData | null>(null)
-  const [timerSecs, setTimerSecs] = useState(3 * 60 * 60)
-  const [journalEntries, setJournalEntries] = useState<JournalEntry[]>([])
-  const [visitCount, setVisitCount] = useState(0)
-  const [loading, setLoading] = useState(true)
 
+  const boardCardsRef = useRef(boardCards)
+  const stringsRef = useRef(strings)
+  const availableCardsRef = useRef(availableCards)
+  const journalEntriesRef = useRef(journalEntries)
+  const timerSecsRef = useRef(timerSecs)
+  const hypothesisCountRef = useRef(hypothesisCount)
+
+  useEffect(() => { boardCardsRef.current = boardCards }, [boardCards])
+  useEffect(() => { stringsRef.current = strings }, [strings])
+  useEffect(() => { availableCardsRef.current = availableCards }, [availableCards])
+  useEffect(() => { journalEntriesRef.current = journalEntries }, [journalEntries])
+  useEffect(() => { timerSecsRef.current = timerSecs }, [timerSecs])
+  useEffect(() => { hypothesisCountRef.current = hypothesisCount }, [hypothesisCount])
+
+  const sessionIdRef = useRef<string | null>(null)
+  const isRestoringRef = useRef(false)
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const boardRef = useRef<HTMLDivElement>(null)
   const ghostRef = useRef<HTMLDivElement | null>(null)
   const dragCardId = useRef<string | null>(null)
 
-  // Load data from Supabase
   useEffect(() => {
-    async function loadCaseData() {
+    async function init() {
       setLoading(true)
-      try {
-        // Load locations
-        const { data: caseLocations } = await supabase
-          .from('case_locations')
-          .select('location_id, is_active, scene_text, locations(id, name, x, y, address, phone)')
-          .eq('case_id', CASE_ID)
+      await loadCaseData()
 
-        if (caseLocations) {
-          const pins: LocationPin[] = caseLocations.map((cl: any) => ({
-            id: cl.location_id,
-            name: cl.locations?.name || 'Unknown',
-            x: cl.locations?.x || 50,
-            y: cl.locations?.y || 50,
-            visited: false,
-          }))
-          setLocations(pins)
+      const t = getTeam()
+      console.log('team in init:', t)
+      if (t) {
+        setTeam(t)
+        const sessionId = await findOrCreateSession(t)
+        sessionIdRef.current = sessionId
+        if (sessionId) {
+          await restoreBoard(sessionId)
         }
-
-        // Load characters
-        const { data: caseChars } = await supabase
-          .from('case_characters')
-          .select('character_id, current_location_id, role, is_active, visit_text, characters(id, name, photo_url, occupation)')
-          .eq('case_id', CASE_ID)
-          .eq('is_active', true)
-
-        // Load clues
-        const { data: caseClues } = await supabase
-          .from('case_clues')
-          .select('id, name, description, found_at_location_id, document_url')
-          .eq('case_id', CASE_ID)
-
-        const cards: CardData[] = []
-
-        if (caseChars) {
-          caseChars.forEach((cc: any) => {
-            cards.push({
-              id: 'char-' + cc.character_id,
-              type: 'witness',
-              name: cc.characters?.name || 'Unknown',
-              detail: cc.characters?.occupation || '',
-              photo: cc.characters?.photo_url || null,
-              desc: cc.visit_text || '',
-              meta: {
-                Occupation: cc.characters?.occupation || '',
-              },
-              doc: null,
-              // store location for journal use
-              _locationId: cc.current_location_id,
-            } as any)
-          })
-        }
-
-        if (caseClues) {
-          caseClues.forEach((cl: any) => {
-            cards.push({
-              id: 'clue-' + cl.id,
-              type: 'clue',
-              name: cl.name,
-              detail: cl.description,
-              photo: null,
-              icon: '📄',
-              desc: cl.description,
-              meta: {
-                'Found at': cl.found_at_location_id,
-              },
-              doc: cl.document_url ? { title: cl.name, content: cl.document_url } : null,
-              _locationId: cl.found_at_location_id,
-              _docUrl: cl.document_url,
-            } as any)
-          })
-        }
-
-        ;(window as any).__allCaseCards = cards
-        setAvailableCards([])
-      } catch (err) {
-        console.error('Failed to load case data:', err)
       }
+
       setLoading(false)
     }
-
-    loadCaseData()
+    init()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
-    const id = setInterval(() => setTimerSecs(s => Math.max(0, s - 1)), 1000)
+    const id = setInterval(() => {
+      if (!isRestoringRef.current) {
+        setTimerSecs(s => Math.max(0, s - 1))
+      }
+    }, 1000)
     return () => clearInterval(id)
   }, [])
 
-  const formatTime = (s: number) => {
-    const h = Math.floor(s / 3600)
-    const m = Math.floor((s % 3600) / 60)
-    const sec = s % 60
-    return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
+  useEffect(() => {
+    if (isRestoringRef.current || !sessionIdRef.current) return
+    setSaveStatus('unsaved')
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = setTimeout(() => { saveSnapshot() }, 1500)
+    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current) }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [boardCards, strings, availableCards, journalEntries, hypothesisCount])
+
+  async function findOrCreateSession(t: TeamData): Promise<string | null> {
+    try {
+      console.log('team data:', t)
+      console.log('CASE_ID:', CASE_ID)
+
+      const { data: existing, error: findError } = await supabase
+        .from('sessions')
+        .select('id')
+        .eq('login_code', t.code)
+        .eq('case_id', CASE_ID)
+        .eq('is_active', true)
+        .single()
+
+      console.log('find existing:', existing, findError)
+
+      if (existing?.id) return existing.id
+
+      const { data: created, error: insertError } = await supabase
+        .from('sessions')
+        .insert({
+          case_id: CASE_ID,
+          team_name: t.name,
+          login_code: t.code,
+          is_active: true,
+          started_at: new Date().toISOString(),
+        })
+        .select('id')
+        .single()
+
+      console.log('insert result:', created, insertError)
+
+      if (insertError) { console.error('Session create error:', insertError); return null }
+      return created?.id ?? null
+    } catch (err) {
+      console.error('findOrCreateSession:', err)
+      return null
+    }
+  }
+
+  async function restoreBoard(sessionId: string) {
+    try {
+      const { data } = await supabase
+        .from('session_board')
+        .select('cards, strings, available_cards, journal_entries, timer_secs, hypothesis_count')
+        .eq('session_id', sessionId)
+        .single()
+
+      if (!data) return
+
+      isRestoringRef.current = true
+
+      if (data.cards && typeof data.cards === 'object') {
+        setBoardCards(data.cards as Record<string, BoardCardData>)
+      }
+      if (Array.isArray(data.strings)) {
+        setStrings(data.strings as StringData[])
+      }
+      if (Array.isArray(data.available_cards) && data.available_cards.length > 0) {
+        const cards = data.available_cards as CardData[]
+        setAvailableCards(cards)
+        ;(window as any).__allCaseCards = [
+          ...((window as any).__allCaseCards || []),
+          ...cards,
+        ]
+      }
+      if (Array.isArray(data.journal_entries)) {
+        const entries = data.journal_entries as JournalEntry[]
+        setJournalEntries(entries)
+        const visitedIds = new Set(
+          entries.filter(e => e.visitType === 'visit').map(e => e.locationId)
+        )
+        if (visitedIds.size > 0) {
+          setLocations(prev => prev.map(l => visitedIds.has(l.id) ? { ...l, visited: true } : l))
+        }
+      }
+      if (typeof data.timer_secs === 'number' && data.timer_secs > 0) {
+        setTimerSecs(data.timer_secs)
+      }
+      if (typeof data.hypothesis_count === 'number') {
+        setHypothesisCount(data.hypothesis_count)
+      }
+
+      setTimeout(() => { isRestoringRef.current = false }, 150)
+    } catch (err) {
+      console.error('restoreBoard:', err)
+      isRestoringRef.current = false
+    }
+  }
+
+  const saveSnapshot = useCallback(async () => {
+    const sessionId = sessionIdRef.current
+    if (!sessionId || isRestoringRef.current) return
+
+    setSaveStatus('saving')
+
+    const { error } = await supabase
+      .from('session_board')
+      .upsert({
+        session_id: sessionId,
+        cards: boardCardsRef.current,
+        strings: stringsRef.current,
+        available_cards: availableCardsRef.current,
+        journal_entries: journalEntriesRef.current,
+        timer_secs: timerSecsRef.current,
+        hypothesis_count: hypothesisCountRef.current,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'session_id' })
+
+    setSaveStatus(error ? 'unsaved' : 'saved')
+    if (error) console.error('saveSnapshot:', error)
+  }, [])
+
+  async function loadCaseData() {
+    try {
+      const { data: caseLocations } = await supabase
+        .from('case_locations')
+        .select('location_id, is_active, scene_text, locations(id, name, x, y, address, phone)')
+        .eq('case_id', CASE_ID)
+
+      if (caseLocations) {
+        setLocations(caseLocations.map((cl: any) => ({
+          id: cl.location_id,
+          name: cl.locations?.name || 'Unknown',
+          x: cl.locations?.x || 50,
+          y: cl.locations?.y || 50,
+          visited: false,
+        })))
+      }
+
+      const { data: caseChars } = await supabase
+        .from('case_characters')
+        .select('character_id, current_location_id, role, is_active, visit_text, characters(id, name, photo_url, occupation)')
+        .eq('case_id', CASE_ID)
+        .eq('is_active', true)
+
+      const { data: caseClues } = await supabase
+        .from('case_clues')
+        .select('id, name, description, found_at_location_id, document_url')
+        .eq('case_id', CASE_ID)
+
+      const cards: CardData[] = []
+
+      caseChars?.forEach((cc: any) => {
+        cards.push({
+          id: 'char-' + cc.character_id,
+          type: 'witness',
+          name: cc.characters?.name || 'Unknown',
+          detail: cc.characters?.occupation || '',
+          photo: cc.characters?.photo_url || null,
+          desc: cc.visit_text || '',
+          meta: { Occupation: cc.characters?.occupation || '' },
+          doc: null,
+          _locationId: cc.current_location_id,
+        } as any)
+      })
+
+      caseClues?.forEach((cl: any) => {
+        cards.push({
+          id: 'clue-' + cl.id,
+          type: 'clue',
+          name: cl.name,
+          detail: cl.description,
+          photo: null,
+          icon: '📄',
+          desc: cl.description,
+          meta: { 'Found at': cl.found_at_location_id },
+          doc: cl.document_url ? { title: cl.name, content: cl.document_url } : null,
+          _locationId: cl.found_at_location_id,
+          _docUrl: cl.document_url,
+        } as any)
+      })
+
+      ;(window as any).__allCaseCards = cards
+    } catch (err) {
+      console.error('loadCaseData:', err)
+    }
   }
 
   const handleSidebarDragStart = useCallback((cardId: string, e: React.MouseEvent) => {
-    if (boardCards[cardId]) return
+    if (boardCardsRef.current[cardId]) return
     dragCardId.current = cardId
-    const src = availableCards.find(c => c.id === cardId)
+    const src = availableCardsRef.current.find(c => c.id === cardId)
     if (!src) return
 
     const ghost = document.createElement('div')
-    ghost.style.cssText = `position:fixed;width:160px;background:var(--paper);border:1px solid var(--paper-dark);border-top:3px solid var(--gold);padding:8px 10px;pointer-events:none;z-index:9999;box-shadow:4px 8px 20px rgba(0,0,0,.5);opacity:.92;transform:rotate(2deg);font-family:'Remington',monospace;`
+    ghost.style.cssText = `position:fixed;width:160px;background:var(--paper);border:1px solid var(--paper-dark);border-top:3px solid var(--gold);padding:8px 10px;pointer-events:none;z-index:9999;box-shadow:4px 8px 20px rgba(0,0,0,.5);opacity:.92;transform:rotate(2deg);`
     ghost.innerHTML = `<div style="font-size:7px;letter-spacing:2px;text-transform:uppercase;color:#8b6914;margin-bottom:3px;font-family:'Cocomat',sans-serif;">${src.type}</div><div style="font-family:'Remington',monospace;font-size:12px;color:#1a1208">${src.name}</div>`
     ghost.style.left = (e.clientX + 14) + 'px'
     ghost.style.top = (e.clientY - 18) + 'px'
     document.body.appendChild(ghost)
     ghostRef.current = ghost
 
-    function mm(e: MouseEvent) {
+    function mm(ev: MouseEvent) {
       if (ghostRef.current) {
-        ghostRef.current.style.left = (e.clientX + 14) + 'px'
-        ghostRef.current.style.top = (e.clientY - 18) + 'px'
+        ghostRef.current.style.left = (ev.clientX + 14) + 'px'
+        ghostRef.current.style.top = (ev.clientY - 18) + 'px'
       }
     }
-    function mu(e: MouseEvent) {
+    function mu(ev: MouseEvent) {
       if (ghostRef.current) { ghostRef.current.remove(); ghostRef.current = null }
       if (dragCardId.current && boardRef.current) {
         const r = boardRef.current.getBoundingClientRect()
-        if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) {
-          dropCard(dragCardId.current, Math.max(10, e.clientX - r.left - 82), Math.max(10, e.clientY - r.top - 55))
+        if (ev.clientX >= r.left && ev.clientX <= r.right && ev.clientY >= r.top && ev.clientY <= r.bottom) {
+          dropCard(dragCardId.current, Math.max(10, ev.clientX - r.left - 82), Math.max(10, ev.clientY - r.top - 55))
         }
       }
       dragCardId.current = null
@@ -217,11 +371,11 @@ export default function Board() {
     }
     document.addEventListener('mousemove', mm)
     document.addEventListener('mouseup', mu)
-  }, [boardCards, availableCards])
+  }, [])
 
   function dropCard(cardId: string, x: number, y: number) {
-    const src = availableCards.find(c => c.id === cardId)
-    if (!src || boardCards[cardId]) return
+    const src = availableCardsRef.current.find(c => c.id === cardId)
+    if (!src || boardCardsRef.current[cardId]) return
     setBoardCards(prev => ({ ...prev, [cardId]: { ...src, x, y, note: '', status: 'witness' as StatusType } }))
     setMovesUsed(m => m + 1)
   }
@@ -287,9 +441,9 @@ export default function Board() {
   }
 
   function handleVisit(entry: JournalEntry): void {
-    setVisitCount(entry.entryNumber)
     setTimerSecs(s => Math.max(0, s - entry.costMinutes * 60))
     setLocations(prev => prev.map(l => l.id === entry.locationId ? { ...l, visited: true } : l))
+
     if (entry.visitType === 'visit') {
       const allCards = (window as any).__allCaseCards || []
       const charCards = allCards.filter((c: any) => c._locationId === entry.locationId && c.type === 'witness')
@@ -298,29 +452,36 @@ export default function Board() {
         : []
       const newCards = [...charCards, ...clueCards]
       if (newCards.length > 0) {
-        setAvailableCards((prev: CardData[]) => {
-          const existingIds = new Set(prev.map((c: CardData) => c.id))
+        setAvailableCards(prev => {
+          const existingIds = new Set(prev.map(c => c.id))
           return [...prev, ...newCards.filter((c: any) => !existingIds.has(c.id))]
         })
       }
     }
+
     setJournalEntries(prev => [...prev, entry])
+    setTimeout(() => saveSnapshot(), 200)
+  }
+
+  const formatTime = (s: number) => {
+    const h = Math.floor(s / 3600)
+    const m = Math.floor((s % 3600) / 60)
+    const sec = s % 60
+    return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
   }
 
   const boardCardIds = new Set(Object.keys(boardCards))
   const availableStringTypes = connectingFrom ? STRING_TYPES[boardCards[connectingFrom]?.type] || [] : []
 
-  const tabBtn = (tab: 'board' | 'investigation' | 'address-book' | 'newspaper', label: string) => (
+  const tabBtn = (tab: typeof activeTab, label: string) => (
     <button key={tab} onClick={() => setActiveTab(tab)} style={{
-      fontFamily: 'Cocomat, sans-serif',
-      fontWeight: 300,
+      fontFamily: 'Cocomat, sans-serif', fontWeight: 300,
       fontSize: 9, letterSpacing: 2, textTransform: 'uppercase',
       padding: '4px 10px',
       border: '1px solid #b8860b',
       background: activeTab === tab ? '#b8860b' : 'transparent',
       color: activeTab === tab ? '#080603' : '#b8860b',
-      cursor: 'pointer',
-      whiteSpace: 'nowrap',
+      cursor: 'pointer', whiteSpace: 'nowrap',
       clipPath: 'polygon(5px 0%, calc(100% - 5px) 0%, 100% 5px, 100% calc(100% - 5px), calc(100% - 5px) 100%, 5px 100%, 0% calc(100% - 5px), 0% 5px)',
     }}>{label}</button>
   )
@@ -330,16 +491,22 @@ export default function Board() {
 
       {/* Top bar */}
       <div style={{
-        background: '#0a0805',
-        borderBottom: '1px solid rgba(184,134,11,0.3)',
+        background: '#0a0805', borderBottom: '1px solid rgba(184,134,11,0.3)',
         padding: '0 16px', height: 50,
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         flexShrink: 0, position: 'relative',
       }}>
         <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 1, background: 'linear-gradient(to right, transparent, #b8860b 20%, #b8860b 80%, transparent)' }} />
 
-        <div style={{ fontFamily: 'ParkLane, serif', color: '#c9a84c', fontSize: 18, letterSpacing: 3, whiteSpace: 'nowrap' }}>
-          The Casebook
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <div style={{ fontFamily: 'ParkLane, serif', color: '#c9a84c', fontSize: 18, letterSpacing: 3, whiteSpace: 'nowrap' }}>
+            The Casebook
+          </div>
+          {team && (
+            <div style={{ fontFamily: 'Cocomat, sans-serif', fontWeight: 200, color: '#5a4a2a', fontSize: 9, letterSpacing: 3, textTransform: 'uppercase', whiteSpace: 'nowrap' }}>
+              {team.name}
+            </div>
+          )}
         </div>
 
         <div style={{ fontFamily: 'Cocomat, sans-serif', fontWeight: 200, color: '#e8dfc4', fontSize: 9, letterSpacing: 3, whiteSpace: 'nowrap', flex: '0 1 auto', textAlign: 'center', padding: '0 12px' }}>
@@ -356,6 +523,14 @@ export default function Board() {
           <button onClick={() => setStrings([])} style={{ ...topBtnStyle, borderColor: '#cc4444', color: '#cc4444' }}>
             Clear Strings
           </button>
+          <div style={{
+            fontFamily: 'Cocomat, sans-serif', fontWeight: 200,
+            fontSize: 8, letterSpacing: 2, textTransform: 'uppercase',
+            marginLeft: 6, whiteSpace: 'nowrap',
+            color: saveStatus === 'saved' ? '#3a6a3a' : saveStatus === 'saving' ? '#b8860b' : '#cc4444',
+          }}>
+            {saveStatus === 'saved' ? '✓ saved' : saveStatus === 'saving' ? '· · ·' : '● unsaved'}
+          </div>
         </div>
       </div>
 
@@ -363,8 +538,13 @@ export default function Board() {
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
 
         {loading ? (
-          <div style={{ width: 220, background: '#0d0a06', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#b8860b', fontFamily: 'Cocomat, sans-serif', fontSize: 10, letterSpacing: 2 }}>
-            LOADING...
+          <div style={{
+            width: 220, background: '#0d0a06', flexShrink: 0,
+            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8,
+          }}>
+            <div style={{ color: '#b8860b', fontFamily: 'Cocomat, sans-serif', fontSize: 10, letterSpacing: 3 }}>
+              LOADING...
+            </div>
           </div>
         ) : (
           <Evidence
@@ -376,7 +556,7 @@ export default function Board() {
 
         <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
 
-          {/* Board tab */}
+          {/* Board */}
           <div style={{ display: activeTab === 'board' ? 'block' : 'none', width: '100%', height: '100%' }}>
             <div
               ref={boardRef}
@@ -414,10 +594,28 @@ export default function Board() {
                       if (connectingFrom) { completeConnect(loc.id, 'location'); return }
                       setLocations(prev => prev.map(l => l.id === loc.id ? { ...l, visited: true } : l))
                     }}
-                    style={{ position: 'absolute', left: loc.x / 100 * bw, top: loc.y / 100 * bh, transform: 'translate(-50%,-50%)', display: 'flex', flexDirection: 'column', alignItems: 'center', cursor: 'pointer', zIndex: 3 }}
+                    style={{
+                      position: 'absolute',
+                      left: loc.x / 100 * bw, top: loc.y / 100 * bh,
+                      transform: 'translate(-50%,-50%)',
+                      display: 'flex', flexDirection: 'column', alignItems: 'center',
+                      cursor: 'pointer', zIndex: 3,
+                    }}
                   >
-                    <div style={{ width: 14, height: 14, borderRadius: '50%', background: loc.visited ? '#cc2222' : '#6a5a3a', border: `2px solid ${loc.visited ? '#8b1a1a' : '#4a3a20'}`, boxShadow: loc.visited ? '0 0 8px rgba(200,30,30,.5)' : 'none', transition: 'all .2s' }} />
-                    <div style={{ fontFamily: 'Remington, monospace', fontSize: 9, background: 'rgba(15,10,5,.85)', color: loc.visited ? '#ff9a9a' : 'var(--gold)', padding: '2px 5px', marginTop: 3, letterSpacing: 1, whiteSpace: 'nowrap', border: '1px solid #2a1f0a' }}>
+                    <div style={{
+                      width: 14, height: 14, borderRadius: '50%',
+                      background: loc.visited ? '#cc2222' : '#6a5a3a',
+                      border: `2px solid ${loc.visited ? '#8b1a1a' : '#4a3a20'}`,
+                      boxShadow: loc.visited ? '0 0 8px rgba(200,30,30,.5)' : 'none',
+                      transition: 'all .2s',
+                    }} />
+                    <div style={{
+                      fontFamily: 'Remington, monospace', fontSize: 9,
+                      background: 'rgba(15,10,5,.85)',
+                      color: loc.visited ? '#ff9a9a' : 'var(--gold)',
+                      padding: '2px 5px', marginTop: 3, letterSpacing: 1,
+                      whiteSpace: 'nowrap', border: '1px solid #2a1f0a',
+                    }}>
                       {loc.name}
                     </div>
                   </div>
@@ -435,7 +633,8 @@ export default function Board() {
                   const color = STRING_COLORS[s.type] || '#888'
                   const dash = ['contradicts', 'found-at', 'based-on'].includes(s.type) ? '7 4' : undefined
                   return (
-                    <path key={i} d={`M ${a.x} ${a.y} Q ${mx} ${my} ${b.x} ${b.y}`}
+                    <path key={i}
+                      d={`M ${a.x} ${a.y} Q ${mx} ${my} ${b.x} ${b.y}`}
                       fill="none" stroke={color}
                       strokeWidth={['suspects', 'was-there'].includes(s.type) ? 3 : 2.5}
                       strokeLinecap="round" strokeDasharray={dash}
@@ -447,14 +646,17 @@ export default function Board() {
 
               {Object.values(boardCards).map(card => (
                 <BoardCard key={card.id} card={card}
-                  onMove={moveCard} onRemove={removeCard} onConnect={startConnect}
+                  onMove={moveCard}
+                  onRemove={removeCard}
+                  onConnect={startConnect}
                   onViewFile={id => setModal({ card: boardCards[id] })}
                   onOpenDoc={id => {
                     const c = boardCards[id] as any
                     if (c?._docUrl) setDoc({ title: c.name, url: c._docUrl })
                     else if (c?.doc) setDoc({ title: c.doc.title, url: c.doc.content })
                   }}
-                  isConnecting={!!connectingFrom} isSource={connectingFrom === card.id}
+                  isConnecting={!!connectingFrom}
+                  isSource={connectingFrom === card.id}
                   onConnectTarget={id => completeConnect(id, card.type)}
                   onNoteChange={(id, note) => setBoardCards(prev => ({ ...prev, [id]: { ...prev[id], note } }))}
                   onStatusChange={(id, status) => setBoardCards(prev => ({ ...prev, [id]: { ...prev[id], status } }))}
@@ -462,41 +664,74 @@ export default function Board() {
               ))}
 
               {connectingFrom && (
-                <div style={{ position: 'absolute', top: 10, left: '50%', transform: 'translateX(-50%)', background: 'rgba(10,5,0,.95)', border: '1px solid var(--gold)', padding: '8px 18px', zIndex: 200, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 7, minWidth: 340 }}>
-                  <div style={{ fontFamily: 'Cocomat, sans-serif', fontWeight: 300, color: 'var(--gold)', fontSize: 11, letterSpacing: 2 }}>Select connection type — then click target</div>
+                <div style={{
+                  position: 'absolute', top: 10, left: '50%', transform: 'translateX(-50%)',
+                  background: 'rgba(10,5,0,.95)', border: '1px solid var(--gold)',
+                  padding: '8px 18px', zIndex: 200,
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 7, minWidth: 340,
+                }}>
+                  <div style={{ fontFamily: 'Cocomat, sans-serif', fontWeight: 300, color: 'var(--gold)', fontSize: 11, letterSpacing: 2 }}>
+                    Select connection type — then click target
+                  </div>
                   <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', justifyContent: 'center' }}>
                     {availableStringTypes.map(t => (
-                      <button key={t} onClick={() => setStringType(t)} style={{ fontSize: 8, padding: '2px 8px', border: `1px solid ${stringType === t ? STRING_COLORS[t] : '#2a1f0a'}`, background: stringType === t ? '#1a0f00' : 'transparent', color: stringType === t ? STRING_COLORS[t] : '#6a5a3a', cursor: 'pointer', letterSpacing: 1, textTransform: 'uppercase', fontFamily: 'Cocomat, sans-serif', fontWeight: 300 }}>
+                      <button key={t} onClick={() => setStringType(t)} style={{
+                        fontSize: 8, padding: '2px 8px',
+                        border: `1px solid ${stringType === t ? STRING_COLORS[t] : '#2a1f0a'}`,
+                        background: stringType === t ? '#1a0f00' : 'transparent',
+                        color: stringType === t ? STRING_COLORS[t] : '#6a5a3a',
+                        cursor: 'pointer', letterSpacing: 1, textTransform: 'uppercase',
+                        fontFamily: 'Cocomat, sans-serif', fontWeight: 300,
+                      }}>
                         {STRING_LABELS[t]}
                       </button>
                     ))}
                   </div>
-                  <button onClick={() => setConnectingFrom(null)} style={{ fontSize: 8, color: '#3a2a10', cursor: 'pointer', letterSpacing: 1, textTransform: 'uppercase', fontFamily: 'Cocomat, sans-serif', background: 'none', border: 'none', textDecoration: 'underline' }}>Cancel</button>
+                  <button onClick={() => setConnectingFrom(null)} style={{
+                    fontSize: 8, color: '#3a2a10', cursor: 'pointer', letterSpacing: 1,
+                    textTransform: 'uppercase', fontFamily: 'Cocomat, sans-serif',
+                    background: 'none', border: 'none', textDecoration: 'underline',
+                  }}>Cancel</button>
                 </div>
               )}
 
-              <div style={{ position: 'absolute', bottom: 12, right: 12, background: 'rgba(8,4,0,.96)', border: '1px solid rgba(184,134,11,0.3)', padding: '12px 16px', zIndex: 50 }}>
-                <div style={{ fontFamily: 'Cocomat, sans-serif', fontWeight: 300, color: '#b8860b', fontSize: 9, letterSpacing: 5, textTransform: 'uppercase', marginBottom: 10, borderBottom: '1px solid rgba(184,134,11,0.2)', paddingBottom: 8 }}>
+              <div style={{
+                position: 'absolute', bottom: 12, right: 12,
+                background: 'rgba(8,4,0,.96)', border: '1px solid rgba(184,134,11,0.3)',
+                padding: '12px 16px', zIndex: 50,
+              }}>
+                <div style={{
+                  fontFamily: 'Cocomat, sans-serif', fontWeight: 300,
+                  color: '#b8860b', fontSize: 9, letterSpacing: 5, textTransform: 'uppercase',
+                  marginBottom: 10, borderBottom: '1px solid rgba(184,134,11,0.2)', paddingBottom: 8,
+                }}>
                   Strings
                 </div>
                 {Object.entries(STRING_LABELS).map(([key, label]) => (
                   <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 6 }}>
                     <svg width="28" height="8" style={{ flexShrink: 0 }}>
-                      <line x1="0" y1="4" x2="28" y2="4" stroke={STRING_COLORS[key]} strokeWidth={['suspects', 'was-there'].includes(key) ? 3 : 2.5} strokeDasharray={['contradicts', 'found-at', 'based-on'].includes(key) ? '7 4' : undefined} strokeLinecap="round" />
+                      <line x1="0" y1="4" x2="28" y2="4"
+                        stroke={STRING_COLORS[key]}
+                        strokeWidth={['suspects', 'was-there'].includes(key) ? 3 : 2.5}
+                        strokeDasharray={['contradicts', 'found-at', 'based-on'].includes(key) ? '7 4' : undefined}
+                        strokeLinecap="round"
+                      />
                     </svg>
-                    <div style={{ fontFamily: 'Cocomat, sans-serif', fontWeight: 200, fontSize: 9, color: '#e8dfc4', letterSpacing: 2, textTransform: 'uppercase' }}>{label}</div>
+                    <div style={{ fontFamily: 'Cocomat, sans-serif', fontWeight: 200, fontSize: 9, color: '#e8dfc4', letterSpacing: 2, textTransform: 'uppercase' }}>
+                      {label}
+                    </div>
                   </div>
                 ))}
               </div>
             </div>
           </div>
 
-          {/* Address Book tab */}
+          {/* Address Book */}
           <div style={{ display: activeTab === 'address-book' ? 'flex' : 'none', width: '100%', height: '100%' }}>
             <AddressBook />
           </div>
 
-          {/* Journal tab */}
+          {/* Investigation */}
           <div style={{ display: activeTab === 'investigation' ? 'flex' : 'none', width: '100%', height: '100%' }}>
             <Journal
               entries={journalEntries}
@@ -505,7 +740,7 @@ export default function Board() {
             />
           </div>
 
-          {/* Newspaper tab */}
+          {/* Newspaper */}
           <div style={{ display: activeTab === 'newspaper' ? 'flex' : 'none', width: '100%', height: '100%' }}>
             <Newspaper pdfUrl={NEWSPAPER_URL} title="Daily Pines - Vol. 10, No. 4" />
           </div>
@@ -518,13 +753,13 @@ export default function Board() {
         background: '#0a0805', borderTop: '1px solid rgba(184,134,11,0.2)',
         padding: '6px 24px', display: 'flex', gap: 32, flexShrink: 0, alignItems: 'center',
       }}>
-        {[
+        {([
           ['Cards on board', Object.keys(boardCards).length],
           ['Connections', strings.length],
           ['Time remaining', formatTime(timerSecs)],
           ['Moves used', movesUsed],
-        ].map(([label, val]) => (
-          <div key={label as string} style={{
+        ] as [string, string | number][]).map(([label, val]) => (
+          <div key={label} style={{
             fontFamily: 'Cocomat, sans-serif', fontWeight: 200,
             fontSize: 10, color: '#e8dfc4', letterSpacing: 3, textTransform: 'uppercase',
           }}>
@@ -533,20 +768,29 @@ export default function Board() {
         ))}
       </div>
 
-      {/* Modal */}
+      {/* Card detail modal */}
       {modal && (
-        <div onClick={e => { if (e.target === e.currentTarget) setModal(null) }}
-          style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', background: 'rgba(5,3,0,.78)', zIndex: 300, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div
+          onClick={e => { if (e.target === e.currentTarget) setModal(null) }}
+          style={{
+            position: 'fixed', top: 0, left: 0, width: '100%', height: '100%',
+            background: 'rgba(5,3,0,.78)', zIndex: 300,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}
+        >
           <div style={{ background: 'var(--paper)', border: '2px solid var(--paper-dark)', maxWidth: 400, width: '90%', boxShadow: '4px 8px 30px rgba(0,0,0,.7)' }}>
             <div style={{ background: 'var(--paper-aged)', borderBottom: '1px solid var(--paper-dark)', padding: '10px 14px', display: 'flex', justifyContent: 'space-between' }}>
               <div>
-                <div style={{ fontSize: 8, letterSpacing: 2, textTransform: 'uppercase', fontWeight: 700, marginBottom: 3, color: '#8b6914', fontFamily: 'Cocomat, sans-serif' }}>{modal.card.type}</div>
-                <div style={{ fontFamily: 'Remington, monospace', fontSize: 16, color: 'var(--ink)' }}>{modal.card.name}</div>
+                <div style={{ fontSize: 8, letterSpacing: 2, textTransform: 'uppercase', fontWeight: 700, marginBottom: 3, color: '#8b6914', fontFamily: 'Cocomat, sans-serif' }}>
+                  {modal.card.type}
+                </div>
+                <div style={{ fontFamily: 'Remington, monospace', fontSize: 16, color: 'var(--ink)' }}>
+                  {modal.card.name}
+                </div>
               </div>
               <button onClick={() => setModal(null)} style={{ background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: 'var(--ink-faded)' }}>×</button>
             </div>
             <div style={{ padding: '12px 14px' }}>
-              {/* Dosie layout: photo left, info right */}
               <div style={{ display: 'flex', gap: 14, marginBottom: 12 }}>
                 {modal.card.photo && (
                   <img src={modal.card.photo} alt="" style={{
@@ -565,7 +809,10 @@ export default function Board() {
                           <button key={s} onClick={() => {
                             setBoardCards(prev => ({ ...prev, [modal.card.id]: { ...prev[modal.card.id], status: s } }))
                             setModal(prev => prev ? { card: { ...prev.card, status: s } } : null)
-                          }} style={{ fontSize: 8, padding: '2px 8px', cursor: 'pointer', border: '1px solid', background: 'transparent', fontFamily: 'Cocomat, sans-serif', letterSpacing: 1, textTransform: 'uppercase',
+                          }} style={{
+                            fontSize: 8, padding: '2px 8px', cursor: 'pointer',
+                            border: '1px solid', background: 'transparent',
+                            fontFamily: 'Cocomat, sans-serif', letterSpacing: 1, textTransform: 'uppercase',
                             color: modal.card.status === s ? 'var(--gold)' : '#8a7a5a',
                             borderColor: modal.card.status === s ? 'var(--gold)' : '#c8b88a',
                           }}>{s}</button>
@@ -581,29 +828,41 @@ export default function Board() {
                   ))}
                 </div>
               </div>
-              <div style={{ fontFamily: 'Ovo, serif', fontSize: 13, color: 'var(--ink-faded)', lineHeight: 1.8 }}>{modal.card.desc}</div>
+              <div style={{ fontFamily: 'Ovo, serif', fontSize: 13, color: 'var(--ink-faded)', lineHeight: 1.8 }}>
+                {modal.card.desc}
+              </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* Doc viewer — PDF iframe */}
+      {/* PDF viewer */}
       {doc && (
-        <div style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', background: 'rgba(3,2,0,.92)', zIndex: 400, display: 'flex', flexDirection: 'column' }}>
-          <div style={{ background: '#0d0a06', borderBottom: '1px solid #2a1f0a', padding: '8px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div style={{ fontFamily: 'ParkLane, serif', color: 'var(--gold)', fontSize: 13, letterSpacing: 2 }}>{doc.title}</div>
-            <button onClick={() => setDoc(null)} style={{ ...topBtnStyle, borderColor: '#cc4444', color: '#cc4444' }}>× Close</button>
+        <div style={{
+          position: 'fixed', top: 0, left: 0, width: '100%', height: '100%',
+          background: 'rgba(3,2,0,.92)', zIndex: 400, display: 'flex', flexDirection: 'column',
+        }}>
+          <div style={{
+            background: '#0d0a06', borderBottom: '1px solid #2a1f0a',
+            padding: '8px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          }}>
+            <div style={{ fontFamily: 'ParkLane, serif', color: 'var(--gold)', fontSize: 13, letterSpacing: 2 }}>
+              {doc.title}
+            </div>
+            <button onClick={() => setDoc(null)} style={{ ...topBtnStyle, borderColor: '#cc4444', color: '#cc4444' }}>
+              × Close
+            </button>
           </div>
           <iframe src={doc.url} style={{ flex: 1, border: 'none', width: '100%' }} title={doc.title} />
         </div>
       )}
+
     </div>
   )
 }
 
 const topBtnStyle: React.CSSProperties = {
-  fontFamily: 'Cocomat, sans-serif',
-  fontWeight: 300,
+  fontFamily: 'Cocomat, sans-serif', fontWeight: 300,
   fontSize: 9, letterSpacing: 2, textTransform: 'uppercase',
   padding: '4px 10px',
   border: '1px solid #b8860b',
