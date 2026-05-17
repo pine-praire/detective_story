@@ -1,4 +1,38 @@
-*, *::before, *::after {
+
+@font-face {
+  font-family: 'ParkLane';
+  src: url('/fonts/ParkLaneNF.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'Ovo';
+  src: url('/fonts/Ovo-Regular.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'Cocomat';
+  src: url('/fonts/Cocomat_Light-trial.ttf') format('truetype');
+  font-weight: 300;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'Cocomat';
+  src: url('/fonts/Cocomat_Ultralight-trial.ttf') format('truetype');
+  font-weight: 200;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'Remington';
+  src: url('/fonts/zai_RemingtonDeluxeTypewriter1938.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+}*, *::before, *::after {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
@@ -24,9 +58,18 @@
 
 html, body {
   height: 100%;
-  overflow: hidden;
+  overflow: auto;
   font-family: 'Courier Prime', monospace;
   background: #0a0805;
   color: var(--ink);
   user-select: none;
+}
+
+.btn-deco {
+  clip-path: polygon(12px 0%, calc(100% - 12px) 0%, 100% 12px, 100% calc(100% - 12px), calc(100% - 12px) 100%, 12px 100%, 0% calc(100% - 12px), 0% 12px);
+  transition: background 0.2s;
+}
+
+.btn-deco:hover:not(:disabled) {
+  background: #c9a84c !important;
 }

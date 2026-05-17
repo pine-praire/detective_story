@@ -1,7 +1,9 @@
 'use client'
 
 import { useState } from 'react'
-import { ALL_ENTRIES, AddressEntry } from '../data/addressData'
+import { supabase } from '@/lib/supabase'
+
+const CASE_ID = '9449b4d3-8567-42c9-b376-e3a260f15498'
 
 export interface JournalEntry {
   id: string
@@ -9,17 +11,22 @@ export interface JournalEntry {
   locationId: string
   locationName: string
   address: string
+  visitType: 'visit' | 'call'
+  code?: number
+  phone?: string
   sceneText: string
   hasClue: boolean
-  clueName?: string
-  characterName?: string
   costMinutes: number
   timestamp: Date
+  characterName?: string
+  characterPhoto?: string
+  clueUrl?: string
+  clueName?: string
 }
 
 interface JournalProps {
   entries: JournalEntry[]
-  onVisit: (entry: AddressEntry) => JournalEntry
+  onVisit: (entry: JournalEntry) => void
   timeRemaining: number
 }
 
@@ -28,21 +35,149 @@ export default function Journal({ entries, onVisit, timeRemaining }: JournalProp
   const [visiting, setVisiting] = useState(false)
   const [error, setError] = useState('')
 
-  function handleGo() {
+  async function handleGo() {
     const trimmed = code.trim()
     if (!trimmed) return
-    const entry = ALL_ENTRIES[trimmed]
-    if (!entry) {
-      setError('Address ' + trimmed + ' not found in the directory.')
-      return
-    }
+
+    const isNumeric = /^\d+$/.test(trimmed)
+    const visitType: 'visit' | 'call' = isNumeric ? 'visit' : 'call'
+    const costMinutes = visitType === 'visit' ? 10 : 5
+
     setError('')
     setVisiting(true)
-    setTimeout(() => {
+
+    try {
+      let locationData: any = null
+      if (visitType === 'visit') {
+        const { data } = await supabase
+          .from('locations')
+          .select('*')
+          .eq('code', parseInt(trimmed))
+          .single()
+        locationData = data
+      } else {
+        const { data } = await supabase
+          .from('locations')
+          .select('*')
+          .eq('phone', trimmed)
+          .single()
+        locationData = data
+      }
+
+      if (!locationData) {
+        const entry: JournalEntry = {
+          id: 'unknown-' + Date.now(),
+          entryNumber: entries.length + 1,
+          locationId: 'unknown',
+          locationName: visitType === 'visit' ? `Address ${trimmed}` : `Number ${trimmed}`,
+          address: trimmed,
+          visitType,
+          sceneText: visitType === 'visit'
+            ? 'You arrived, but found nothing of interest.'
+            : 'No one answered.',
+          hasClue: false,
+          costMinutes,
+          timestamp: new Date(),
+        }
+        onVisit(entry)
+        setCode('')
+        setVisiting(false)
+        return
+      }
+
+      const { data: caseLocData } = await supabase
+        .from('case_locations')
+        .select('is_active, scene_text')
+        .eq('case_id', CASE_ID)
+        .eq('location_id', locationData.id)
+        .single()
+
+      if (!caseLocData || !caseLocData.is_active) {
+        const entry: JournalEntry = {
+          id: locationData.id + '-' + Date.now(),
+          entryNumber: entries.length + 1,
+          locationId: locationData.id,
+          locationName: locationData.name,
+          address: locationData.address,
+          visitType,
+          code: locationData.code,
+          phone: locationData.phone,
+          sceneText: visitType === 'visit'
+            ? 'You arrived, but found nothing of interest.'
+            : 'No one answered.',
+          hasClue: false,
+          costMinutes,
+          timestamp: new Date(),
+        }
+        onVisit(entry)
+        setCode('')
+        setVisiting(false)
+        return
+      }
+
+      const { data: charData } = await supabase
+        .from('case_characters')
+        .select('*, characters(name, photo_url, occupation)')
+        .eq('case_id', CASE_ID)
+        .eq('current_location_id', locationData.id)
+        .eq('is_active', true)
+        .single()
+
+      let clueData: any = null
+      if (visitType === 'visit') {
+        const { data } = await supabase
+          .from('case_clues')
+          .select('*')
+          .eq('case_id', CASE_ID)
+          .eq('found_at_location_id', locationData.id)
+          .single()
+        clueData = data
+      }
+
+      let sceneText = 'You arrived, but found nothing of interest.'
+      if (visitType === 'visit') {
+        if (charData?.visit_text) {
+          sceneText = charData.visit_text
+        } else if (caseLocData.scene_text) {
+          sceneText = caseLocData.scene_text
+        }
+      } else {
+        if (!charData) {
+          sceneText = 'No one answered.'
+        } else if (charData.phone_text) {
+          sceneText = charData.phone_text
+        } else {
+          sceneText = 'The phone rang for a long time before someone picked up. "I\'d rather not discuss this over the phone. Come and see me in person."'
+        }
+      }
+
+      const entry: JournalEntry = {
+        id: locationData.id + '-' + Date.now(),
+        entryNumber: entries.length + 1,
+        locationId: locationData.id,
+        locationName: locationData.name,
+        address: locationData.address,
+        visitType,
+        code: locationData.code,
+        phone: locationData.phone,
+        sceneText,
+        hasClue: visitType === 'visit' && !!clueData,
+        costMinutes,
+        timestamp: new Date(),
+        characterName: charData?.characters?.name,
+        characterPhoto: visitType === 'visit' && charData ? charData.characters?.photo_url : undefined,
+        clueUrl: visitType === 'visit' && clueData ? clueData.document_url : undefined,
+        clueName: visitType === 'visit' && clueData ? clueData.name : undefined,
+      }
+
       onVisit(entry)
       setCode('')
-      setVisiting(false)
-    }, 600)
+    } catch (err) {
+      console.error(err)
+      setError('Something went wrong. Try again.')
+    }
+
+    setVisiting(false)
   }
 
   const sorted = [...entries].reverse()
@@ -53,24 +188,33 @@ export default function Journal({ entries, onVisit, timeRemaining }: JournalProp
       background: '#0d0a06', overflow: 'hidden',
     }}>
 
-      {/* Travel input */}
+      {/* Input */}
       <div style={{
-        background: '#141009', borderBottom: '2px solid #2a1f0a',
-        padding: '16px 28px', flexShrink: 0,
+        background: '#0a0805',
+        borderBottom: '1px solid rgba(184,134,11,0.2)',
+        padding: '20px 28px', flexShrink: 0,
       }}>
         <div style={{
-          fontFamily: 'Special Elite, cursive', color: '#b8860b',
-          fontSize: 15, letterSpacing: 3, marginBottom: 14,
+          fontFamily: 'ParkLane, serif',
+          color: '#c9a84c',
+          fontSize: 22, letterSpacing: 4, marginBottom: 4,
         }}>
-          Journal
+          Investigation
+        </div>
+        <div style={{
+          fontFamily: 'Cocomat, sans-serif', fontWeight: 200,
+          fontSize: 10, color: '#5a4a2a', letterSpacing: 3,
+          textTransform: 'uppercase', marginBottom: 16,
+        }}>
+          Enter address code to visit · Enter phone number to call
         </div>
 
         <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
           <div style={{
-            fontSize: 12, color: '#8a7a5a', letterSpacing: 1,
+            fontFamily: 'Cocomat, sans-serif', fontWeight: 200,
+            fontSize: 10, color: '#e8dfc4', letterSpacing: 4,
             textTransform: 'uppercase', whiteSpace: 'nowrap',
             display: 'flex', alignItems: 'center',
-            fontFamily: 'Courier Prime, monospace',
           }}>
             Go to:
           </div>
@@ -79,17 +223,18 @@ export default function Journal({ entries, onVisit, timeRemaining }: JournalProp
             value={code}
             onChange={e => { setCode(e.target.value); setError('') }}
             onKeyDown={e => e.key === 'Enter' && handleGo()}
-            placeholder="Enter address number..."
+            placeholder="203 or 5-0001..."
             style={{
               flex: 1,
               padding: '10px 14px',
-              background: '#0d0a06',
-              border: '1px solid #3a2a10',
-              fontFamily: 'Courier Prime, monospace',
+              background: '#080603',
+              border: '1px solid rgba(184,134,11,0.2)',
+              borderBottom: '1px solid rgba(184,134,11,0.5)',
+              fontFamily: 'Remington, monospace',
               fontSize: 14,
               color: '#e8dfc4',
               outline: 'none',
-              letterSpacing: 1,
+              letterSpacing: 2,
               height: 44,
             }}
           />
@@ -97,29 +242,26 @@ export default function Journal({ entries, onVisit, timeRemaining }: JournalProp
             onClick={handleGo}
             disabled={visiting || timeRemaining <= 0}
             style={{
-              fontFamily: 'Courier Prime, monospace',
-              fontSize: 13,
-              letterSpacing: 2,
-              textTransform: 'uppercase',
-              fontWeight: 700,
-              padding: '0 24px',
-              height: 44,
-              background: visiting ? '#3a2a10' : '#b8860b',
-              color: '#ffffff',
-              border: 'none',
+              fontFamily: 'Cocomat, sans-serif', fontWeight: 300,
+              fontSize: 11, letterSpacing: 5, textTransform: 'uppercase',
+              padding: '0 24px', height: 44,
+              background: visiting ? 'transparent' : '#b8860b',
+              color: visiting ? '#b8860b' : '#080603',
+              border: '1px solid #b8860b',
               cursor: visiting ? 'default' : 'pointer',
               opacity: timeRemaining <= 0 ? 0.4 : 1,
               flexShrink: 0,
+              clipPath: 'polygon(8px 0%, calc(100% - 8px) 0%, 100% 8px, 100% calc(100% - 8px), calc(100% - 8px) 100%, 8px 100%, 0% calc(100% - 8px), 0% 8px)',
             }}
           >
-            {visiting ? '...' : 'GO'}
+            {visiting ? '...' : 'Go'}
           </button>
         </div>
 
         {error && (
           <div style={{
-            marginTop: 8, fontSize: 12, color: '#cc4444',
-            fontFamily: 'Courier Prime, monospace', letterSpacing: 0.5,
+            marginTop: 10, fontFamily: 'Cocomat, sans-serif', fontWeight: 300,
+            fontSize: 11, color: '#cc4444', letterSpacing: 1,
           }}>
             {error}
           </div>
@@ -127,92 +269,128 @@ export default function Journal({ entries, onVisit, timeRemaining }: JournalProp
 
         {visiting && (
           <div style={{
-            marginTop: 8, fontSize: 12, color: '#6a5a3a',
-            letterSpacing: 1, fontFamily: 'Courier Prime, monospace',
+            marginTop: 10, fontFamily: 'Ovo, serif',
+            fontSize: 12, color: '#7a6a4a', letterSpacing: 1, fontStyle: 'italic',
           }}>
-            Travelling...
+            {/^\d+$/.test(code) ? 'Travelling...' : 'Calling...'}
           </div>
         )}
       </div>
 
-      {/* Journal entries */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '12px 0' }}>
+      {/* Entries */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '20px 0' }}>
         {sorted.length === 0 && (
           <div style={{
-            padding: '40px 28px',
-            fontSize: 14, color: '#4a3a20',
-            fontFamily: 'Courier Prime, monospace',
-            lineHeight: 1.6, textAlign: 'center',
+            padding: '48px 28px',
+            fontFamily: 'Ovo, serif',
+            fontSize: 14, color: '#5a4a2a',
+            lineHeight: 1.8, textAlign: 'center', fontStyle: 'italic',
           }}>
-            No visits yet. Enter an address number above to travel.
+            No visits yet. Enter an address code or phone number above.
           </div>
         )}
 
         {sorted.map(entry => (
           <div key={entry.id} style={{
-            margin: '0 20px 16px',
-            border: '1px solid #2a1f0a',
+            margin: '0 24px 16px',
+            border: '1px solid rgba(184,134,11,0.15)',
             background: '#0a0805',
+            position: 'relative',
           }}>
-            {/* Entry header */}
+            {/* Left accent line */}
             <div style={{
-              background: '#141009',
-              borderBottom: '1px solid #2a1f0a',
-              padding: '10px 16px',
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
+              position: 'absolute', left: 0, top: 0, bottom: 0, width: 2,
+              background: entry.visitType === 'visit'
+                ? 'rgba(184,134,11,0.5)'
+                : 'rgba(74,154,218,0.5)',
+            }} />
+
+            {/* Header */}
+            <div style={{
+              background: '#0d0a06',
+              borderBottom: '1px solid rgba(184,134,11,0.15)',
+              padding: '10px 16px 10px 20px',
+              display: 'flex', alignItems: 'center', gap: 10,
             }}>
-              <div style={{ display: 'flex', gap: 12, alignItems: 'baseline' }}>
-                <div style={{
-                  fontFamily: 'Special Elite, cursive',
-                  color: '#e8dfc4',
-                  fontSize: 15,
-                  letterSpacing: 1,
-                }}>
-                  {entry.locationName}
-                </div>
-                {entry.characterName && (
-                  <div style={{
-                    fontSize: 11, color: '#8b6914',
-                    letterSpacing: 1, textTransform: 'uppercase',
-                    fontFamily: 'Courier Prime, monospace',
-                  }}>
-                    {entry.characterName}
-                  </div>
-                )}
-              </div>
+              {/* Badge: Visit 203 / Call 5-0001 */}
               <div style={{
-                fontSize: 11, color: '#4a3a20',
-                letterSpacing: 1, fontFamily: 'Courier Prime, monospace',
+                fontFamily: 'Cocomat, sans-serif', fontWeight: 300,
+                fontSize: 9, letterSpacing: 2, textTransform: 'uppercase',
+                padding: '2px 7px', whiteSpace: 'nowrap', flexShrink: 0,
+                border: `1px solid ${entry.visitType === 'visit' ? '#b8860b' : '#4a9ada'}`,
+                color: entry.visitType === 'visit' ? '#b8860b' : '#4a9ada',
               }}>
-                #{entry.entryNumber} · {entry.address}
+{entry.visitType === 'visit' ? 'Visit' : 'Call'}
+              </div>
+
+              {/* Location — Character */}
+              <div style={{
+                fontFamily: 'Remington, monospace',
+                color: '#e8dfc4', fontSize: 14, letterSpacing: 1,
+              }}>
+{entry.visitType === 'visit' ? `${entry.code}` : `${entry.phone}`} — {entry.locationName}{entry.characterName ? ` — ${entry.characterName}` : ''}
+              </div>
+
+              {/* Cost */}
+              <div style={{
+                marginLeft: 'auto', flexShrink: 0,
+                fontFamily: 'Cocomat, sans-serif', fontWeight: 200,
+                fontSize: 10, color: '#3a2a10', letterSpacing: 2,
+              }}>
+                −{entry.costMinutes} min
               </div>
             </div>
 
-            {/* Scene text */}
-            <div style={{ padding: '14px 16px' }}>
+            {/* Scene text with optional photo */}
+            <div style={{ padding: '14px 16px 14px 20px', overflow: 'hidden' }}>
+              {entry.visitType === 'visit' && entry.characterPhoto && (
+                <img
+                  src={entry.characterPhoto}
+                  alt={entry.characterName}
+                  style={{
+                    width: 80, height: 100,
+                    objectFit: 'cover', objectPosition: 'center top',
+                    filter: 'sepia(70%) contrast(1.1)',
+                    border: '1px solid rgba(184,134,11,0.3)',
+                    float: 'left', marginRight: 16, marginBottom: 8,
+                  }}
+                />
+              )}
               <div style={{
-                fontSize: 14,
-                color: '#c8b88a',
-                lineHeight: 1.7,
-                fontFamily: 'Courier Prime, monospace',
-                borderLeft: '2px solid #2a1f0a',
-                paddingLeft: 14,
+                fontFamily: 'Ovo, serif',
+                fontSize: 14, color: '#e8dfc4',
+                lineHeight: 1.9,
               }}>
                 {entry.sceneText}
               </div>
 
-              {entry.hasClue && (
-                <div style={{
-                  marginTop: 10, padding: '7px 12px',
-                  border: '1px solid #c87a3a',
-                  background: 'rgba(200,120,60,.08)',
-                  fontSize: 12, color: '#c87a3a',
-                  letterSpacing: 1,
-                  fontFamily: 'Courier Prime, monospace',
-                }}>
-                  Evidence found: {entry.clueName}
+              {entry.hasClue && entry.clueUrl && (
+                <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 12, clear: 'both' }}>
+                  <div style={{
+                    padding: '8px 14px',
+                    border: '1px solid rgba(200,120,60,0.4)',
+                    background: 'rgba(200,120,60,0.06)',
+                    fontFamily: 'Cocomat, sans-serif', fontWeight: 300,
+                    fontSize: 11, color: '#c87a3a', letterSpacing: 2,
+                    textTransform: 'uppercase', flex: 1,
+                  }}>
+                    Evidence found: {entry.clueName}
+                  </div>
+                  <a
+                    href={entry.clueUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                      fontFamily: 'Cocomat, sans-serif', fontWeight: 300,
+                      fontSize: 10, letterSpacing: 3, textTransform: 'uppercase',
+                      padding: '8px 16px',
+                      background: 'transparent', color: '#c87a3a',
+                      border: '1px solid rgba(200,120,60,0.4)',
+                      textDecoration: 'none', whiteSpace: 'nowrap',
+                    }}
+                  >
+                    Open doc ↗
+                  </a>
                 </div>
               )}
             </div>

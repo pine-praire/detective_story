@@ -15,9 +15,9 @@ export default function RootLayout({
     <html lang="en">
       <head>
         <link
-          href="https://fonts.googleapis.com/css2?family=Special+Elite&family=Courier+Prime:ital,wght@0,400;0,700;1,400&display=swap"
-          rel="stylesheet"
-        />
+  href="https://fonts.googleapis.com/css2?family=Special+Elite&family=Courier+Prime:ital,wght@0,400;0,700;1,400&family=Poiret+One&display=swap"
+  rel="stylesheet"
+/>
       </head>
       <body style={{ margin: 0, padding: 0, background: '#0a0805' }}>
         {children}

@@ -6,6 +6,9 @@ import BoardCard, { BoardCardData, StatusType } from './BoardCard'
 import Newspaper from './Newspaper'
 import AddressBook from './AddressBook'
 import Journal, { JournalEntry } from './Journal'
+import { supabase } from '@/lib/supabase'
+
+const CASE_ID = '9449b4d3-8567-42c9-b376-e3a260f15498'
 
 interface LocationPin {
   id: string
@@ -28,7 +31,7 @@ interface ModalData {
 
 interface DocData {
   title: string
-  content: string
+  url: string
 }
 
 const STRING_TYPES: Record<string, string[]> = {
@@ -60,46 +63,12 @@ const STRING_COLORS: Record<string, string> = {
 
 const NEWSPAPER_URL = 'https://cgpeozfkxrdqtqmbrcnh.supabase.co/storage/v1/object/public/newspaper/newspaper_test.pdf'
 
-const SAMPLE_CARDS: CardData[] = [
-  { id: 'w1', type: 'witness', name: 'Lord Ashford', detail: 'Host of the manor', photo: null,
-    desc: 'Lord Reginald Ashford, 54. Owner of Ashford Manor. Known for extravagant lifestyle and mounting debts.',
-    meta: { Age: '54', Occupation: 'Landowner', 'Last seen': 'Library, 11:40pm', Alibi: 'Unconfirmed' } },
-  { id: 'w2', type: 'witness', name: 'Mrs. Hargrove', detail: 'Widow, arrived late', photo: null,
-    desc: 'Eleanor Hargrove, 41. Widow of Colonel Hargrove. Quarrelled with the victim over an inheritance.',
-    meta: { Age: '41', Occupation: 'Widow, socialite', 'Last seen': 'East corridor, midnight', Alibi: 'Claimed headache' } },
-  { id: 'w3', type: 'witness', name: 'Dr. Pemberton', detail: 'Physician, no alibi', photo: null,
-    desc: 'Dr. Archibald Pemberton, 48. No one can account for his whereabouts between 11pm and 1am.',
-    meta: { Age: '48', Occupation: 'Physician', 'Last seen': 'Drawing room, 11pm', Alibi: 'Unverified' } },
-  { id: 'w4', type: 'witness', name: 'James Whitmore', detail: 'Butler, 22 yrs service', photo: null,
-    desc: 'James Whitmore, 61. Found the decanter in the morning. Claims he locked all exterior doors at 10pm.',
-    meta: { Age: '61', Occupation: 'Butler', 'Last seen': 'Pantry, 10:30pm', Alibi: 'Staff corroborate' } },
-  { id: 'cl1', type: 'clue', name: 'Monogrammed glove', detail: 'Initial W, left hand', icon: '◼',
-    desc: 'A single white evening glove found beneath the chaise longue. Embroidered with W in gold thread.',
-    meta: { Found: 'Library, beneath chaise', Condition: 'Slightly damp', Notable: 'Gardenia scent' },
-    doc: { title: 'Evidence Report - Glove', content: 'EVIDENCE REPORT No. 14-A\n\nItem: White evening glove, left hand\nInitial: W (gold thread)\nCondition: Slightly damp\nScent: Gardenia\nLocation: beneath chaise, The Library\nDate: 15 May 1924' } },
-  { id: 'cl2', type: 'clue', name: 'Torn letter', detail: 'References a debt', icon: '✎',
-    desc: 'Three fragments in the fireplace grate. Reference a sum of 4000 pounds and a deadline of the 15th.',
-    meta: { Found: 'Library fireplace', Condition: 'Partially burned', Ink: 'Brown-black' },
-    doc: { title: 'Forensic Document Report', content: 'FORENSIC DOCUMENT ANALYSIS\n\nDocument: Three fragments, partially burned\nLegible text: 4000 pounds by no later than the 15th\nyou leave me no choice but to...' } },
-  { id: 'cl3', type: 'clue', name: 'Pocket watch', detail: 'Stopped at 11:47', icon: '◉',
-    desc: 'Silver pocket watch found on the east corridor floor. Crystal cracked, stopped at 11:47pm.',
-    meta: { Found: 'East corridor', 'Time stopped': '11:47 pm', Engraving: 'To R from E' },
-    doc: { title: 'Evidence Report - Watch', content: 'EVIDENCE REPORT No. 14-B\n\nItem: Silver pocket watch\nMaker: Longines\nStopped: 11:47 PM\nInscription: To R, with eternal devotion - E' } },
-]
-
-const SAMPLE_LOCATIONS: LocationPin[] = [
-  { id: 'loc1', name: 'The Library',    x: 33, y: 25, visited: false },
-  { id: 'loc2', name: 'East Wing',      x: 78, y: 35, visited: false },
-  { id: 'loc3', name: 'Garden Terrace', x: 55, y: 72, visited: false },
-  { id: 'loc4', name: 'Drawing Room',   x: 22, y: 65, visited: false },
-  { id: 'loc5', name: 'The Study',      x: 78, y: 70, visited: false },
-]
-
 export default function Board() {
-const [activeTab, setActiveTab] = useState<'board' | 'address-book' | 'journal' | 'newspaper'>('board')
-const [boardCards, setBoardCards] = useState<Record<string, BoardCardData>>({})
+  const [activeTab, setActiveTab] = useState<'board' | 'investigation' | 'address-book' | 'newspaper'>('investigation')
+  const [boardCards, setBoardCards] = useState<Record<string, BoardCardData>>({})
   const [strings, setStrings] = useState<StringData[]>([])
-  const [locations, setLocations] = useState<LocationPin[]>(SAMPLE_LOCATIONS)
+  const [locations, setLocations] = useState<LocationPin[]>([])
+  const [availableCards, setAvailableCards] = useState<CardData[]>([])
   const [connectingFrom, setConnectingFrom] = useState<string | null>(null)
   const [stringType, setStringType] = useState<string>('knows')
   const [hypothesisCount, setHypothesisCount] = useState(0)
@@ -107,12 +76,100 @@ const [boardCards, setBoardCards] = useState<Record<string, BoardCardData>>({})
   const [modal, setModal] = useState<ModalData | null>(null)
   const [doc, setDoc] = useState<DocData | null>(null)
   const [timerSecs, setTimerSecs] = useState(3 * 60 * 60)
-const [journalEntries, setJournalEntries] = useState<JournalEntry[]>([])
-const [visitCount, setVisitCount] = useState(0)
+  const [journalEntries, setJournalEntries] = useState<JournalEntry[]>([])
+  const [visitCount, setVisitCount] = useState(0)
+  const [loading, setLoading] = useState(true)
 
   const boardRef = useRef<HTMLDivElement>(null)
   const ghostRef = useRef<HTMLDivElement | null>(null)
   const dragCardId = useRef<string | null>(null)
+
+  // Load data from Supabase
+  useEffect(() => {
+    async function loadCaseData() {
+      setLoading(true)
+      try {
+        // Load locations
+        const { data: caseLocations } = await supabase
+          .from('case_locations')
+          .select('location_id, is_active, scene_text, locations(id, name, x, y, address, phone)')
+          .eq('case_id', CASE_ID)
+
+        if (caseLocations) {
+          const pins: LocationPin[] = caseLocations.map((cl: any) => ({
+            id: cl.location_id,
+            name: cl.locations?.name || 'Unknown',
+            x: cl.locations?.x || 50,
+            y: cl.locations?.y || 50,
+            visited: false,
+          }))
+          setLocations(pins)
+        }
+
+        // Load characters
+        const { data: caseChars } = await supabase
+          .from('case_characters')
+          .select('character_id, current_location_id, role, is_active, visit_text, characters(id, name, photo_url, occupation)')
+          .eq('case_id', CASE_ID)
+          .eq('is_active', true)
+
+        // Load clues
+        const { data: caseClues } = await supabase
+          .from('case_clues')
+          .select('id, name, description, found_at_location_id, document_url')
+          .eq('case_id', CASE_ID)
+
+        const cards: CardData[] = []
+
+        if (caseChars) {
+          caseChars.forEach((cc: any) => {
+            cards.push({
+              id: 'char-' + cc.character_id,
+              type: 'witness',
+              name: cc.characters?.name || 'Unknown',
+              detail: cc.characters?.occupation || '',
+              photo: cc.characters?.photo_url || null,
+              desc: cc.visit_text || '',
+              meta: {
+                Occupation: cc.characters?.occupation || '',
+              },
+              doc: null,
+              // store location for journal use
+              _locationId: cc.current_location_id,
+            } as any)
+          })
+        }
+
+        if (caseClues) {
+          caseClues.forEach((cl: any) => {
+            cards.push({
+              id: 'clue-' + cl.id,
+              type: 'clue',
+              name: cl.name,
+              detail: cl.description,
+              photo: null,
+              icon: '📄',
+              desc: cl.description,
+              meta: {
+                'Found at': cl.found_at_location_id,
+              },
+              doc: cl.document_url ? { title: cl.name, content: cl.document_url } : null,
+              _locationId: cl.found_at_location_id,
+              _docUrl: cl.document_url,
+            } as any)
+          })
+        }
+
+        ;(window as any).__allCaseCards = cards
+        setAvailableCards([])
+      } catch (err) {
+        console.error('Failed to load case data:', err)
+      }
+      setLoading(false)
+    }
+
+    loadCaseData()
+  }, [])
 
   useEffect(() => {
     const id = setInterval(() => setTimerSecs(s => Math.max(0, s - 1)), 1000)
@@ -129,12 +186,12 @@ const [visitCount, setVisitCount] = useState(0)
   const handleSidebarDragStart = useCallback((cardId: string, e: React.MouseEvent) => {
     if (boardCards[cardId]) return
     dragCardId.current = cardId
-    const src = SAMPLE_CARDS.find(c => c.id === cardId)
+    const src = availableCards.find(c => c.id === cardId)
     if (!src) return
 
     const ghost = document.createElement('div')
-    ghost.style.cssText = `position:fixed;width:160px;background:var(--paper);border:1px solid var(--paper-dark);border-top:3px solid var(--gold);padding:8px 10px;pointer-events:none;z-index:9999;box-shadow:4px 8px 20px rgba(0,0,0,.5);opacity:.92;transform:rotate(2deg);font-family:'Courier Prime',monospace;`
-    ghost.innerHTML = `<div style="font-size:7px;letter-spacing:2px;text-transform:uppercase;color:#8b6914;margin-bottom:3px">${src.type}</div><div style="font-family:'Special Elite',cursive;font-size:12px;color:#1a1208">${src.name}</div>`
+    ghost.style.cssText = `position:fixed;width:160px;background:var(--paper);border:1px solid var(--paper-dark);border-top:3px solid var(--gold);padding:8px 10px;pointer-events:none;z-index:9999;box-shadow:4px 8px 20px rgba(0,0,0,.5);opacity:.92;transform:rotate(2deg);font-family:'Remington',monospace;`
+    ghost.innerHTML = `<div style="font-size:7px;letter-spacing:2px;text-transform:uppercase;color:#8b6914;margin-bottom:3px;font-family:'Cocomat',sans-serif;">${src.type}</div><div style="font-family:'Remington',monospace;font-size:12px;color:#1a1208">${src.name}</div>`
     ghost.style.left = (e.clientX + 14) + 'px'
     ghost.style.top = (e.clientY - 18) + 'px'
     document.body.appendChild(ghost)
@@ -160,10 +217,10 @@ const [visitCount, setVisitCount] = useState(0)
     }
     document.addEventListener('mousemove', mm)
     document.addEventListener('mouseup', mu)
-  }, [boardCards])
+  }, [boardCards, availableCards])
 
   function dropCard(cardId: string, x: number, y: number) {
-    const src = SAMPLE_CARDS.find(c => c.id === cardId)
+    const src = availableCards.find(c => c.id === cardId)
     if (!src || boardCards[cardId]) return
     setBoardCards(prev => ({ ...prev, [cardId]: { ...src, x, y, note: '', status: 'witness' as StatusType } }))
     setMovesUsed(m => m + 1)
@@ -229,17 +286,42 @@ const [visitCount, setVisitCount] = useState(0)
     return { x: c.x + 82, y: c.y + 50 }
   }
 
+  function handleVisit(entry: JournalEntry): void {
+    setVisitCount(entry.entryNumber)
+    setTimerSecs(s => Math.max(0, s - entry.costMinutes * 60))
+    setLocations(prev => prev.map(l => l.id === entry.locationId ? { ...l, visited: true } : l))
+    if (entry.visitType === 'visit') {
+      const allCards = (window as any).__allCaseCards || []
+      const charCards = allCards.filter((c: any) => c._locationId === entry.locationId && c.type === 'witness')
+      const clueCards = entry.hasClue
+        ? allCards.filter((c: any) => c._locationId === entry.locationId && c.type === 'clue')
+        : []
+      const newCards = [...charCards, ...clueCards]
+      if (newCards.length > 0) {
+        setAvailableCards((prev: CardData[]) => {
+          const existingIds = new Set(prev.map((c: CardData) => c.id))
+          return [...prev, ...newCards.filter((c: any) => !existingIds.has(c.id))]
+        })
+      }
+    }
+    setJournalEntries(prev => [...prev, entry])
+  }
+
   const boardCardIds = new Set(Object.keys(boardCards))
   const availableStringTypes = connectingFrom ? STRING_TYPES[boardCards[connectingFrom]?.type] || [] : []
 
-const tabBtn = (tab: 'board' | 'address-book' | 'journal' | 'newspaper', label: string) => (    <button key={tab} onClick={() => setActiveTab(tab)} style={{
-      fontFamily: 'Courier Prime, monospace',
-      fontSize: 10, letterSpacing: 1, textTransform: 'uppercase',
-      padding: '5px 14px',
-      border: '1px solid var(--gold)',
-      background: activeTab === tab ? 'var(--gold)' : 'transparent',
-      color: activeTab === tab ? 'var(--sidebar)' : 'var(--gold)',
+  const tabBtn = (tab: 'board' | 'investigation' | 'address-book' | 'newspaper', label: string) => (
+    <button key={tab} onClick={() => setActiveTab(tab)} style={{
+      fontFamily: 'Cocomat, sans-serif',
+      fontWeight: 300,
+      fontSize: 9, letterSpacing: 2, textTransform: 'uppercase',
+      padding: '4px 10px',
+      border: '1px solid #b8860b',
+      background: activeTab === tab ? '#b8860b' : 'transparent',
+      color: activeTab === tab ? '#080603' : '#b8860b',
       cursor: 'pointer',
+      whiteSpace: 'nowrap',
+      clipPath: 'polygon(5px 0%, calc(100% - 5px) 0%, 100% 5px, 100% calc(100% - 5px), calc(100% - 5px) 100%, 5px 100%, 0% calc(100% - 5px), 0% 5px)',
     }}>{label}</button>
   )
 
@@ -248,25 +330,31 @@ const tabBtn = (tab: 'board' | 'address-book' | 'journal' | 'newspaper', label: 
 
       {/* Top bar */}
       <div style={{
-        background: 'var(--sidebar)', borderBottom: '2px solid var(--gold)',
-        padding: '0 20px', height: 50, display: 'flex',
-        alignItems: 'center', justifyContent: 'space-between', flexShrink: 0,
+        background: '#0a0805',
+        borderBottom: '1px solid rgba(184,134,11,0.3)',
+        padding: '0 16px', height: 50,
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        flexShrink: 0, position: 'relative',
       }}>
-        <div style={{ fontFamily: 'Special Elite, cursive', color: 'var(--gold)', fontSize: 19, letterSpacing: 3 }}>
+        <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 1, background: 'linear-gradient(to right, transparent, #b8860b 20%, #b8860b 80%, transparent)' }} />
+
+        <div style={{ fontFamily: 'ParkLane, serif', color: '#c9a84c', fontSize: 18, letterSpacing: 3, whiteSpace: 'nowrap' }}>
           The Casebook
         </div>
-       <div style={{ fontSize: 12, color: '#ffffff', letterSpacing: 2, fontFamily: 'Courier Prime, monospace' }}>
-  CASE NO. 001 - THE NEPTUNE AFFAIR - 1924
-</div>
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+
+        <div style={{ fontFamily: 'Cocomat, sans-serif', fontWeight: 200, color: '#e8dfc4', fontSize: 9, letterSpacing: 3, whiteSpace: 'nowrap', flex: '0 1 auto', textAlign: 'center', padding: '0 12px' }}>
+          THE LAKE AFFAIR — PINE PRAIRE, 2025
+        </div>
+
+        <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexShrink: 0 }}>
+          {tabBtn('investigation', 'Investigation')}
           {tabBtn('board', 'Board')}
           {tabBtn('address-book', 'Address Book')}
-          {tabBtn('journal', 'Journal')}
           {tabBtn('newspaper', 'Newspaper')}
-          <div style={{ width: 1, height: 20, background: '#3a2a10', margin: '0 4px' }} />
+          <div style={{ width: 1, height: 16, background: 'rgba(184,134,11,0.2)', margin: '0 2px' }} />
           <button onClick={addHypothesis} style={topBtnStyle}>+ Hypothesis</button>
-          <button onClick={() => setStrings([])} style={{ ...topBtnStyle, borderColor: 'var(--red)', color: '#cc2222' }}>
-            Clear strings
+          <button onClick={() => setStrings([])} style={{ ...topBtnStyle, borderColor: '#cc4444', color: '#cc4444' }}>
+            Clear Strings
           </button>
         </div>
       </div>
@@ -274,11 +362,17 @@ const tabBtn = (tab: 'board' | 'address-book' | 'journal' | 'newspaper', label: 
       {/* Main */}
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
 
-        <Evidence
-          cards={SAMPLE_CARDS}
-          onDragStart={handleSidebarDragStart}
-          boardCardIds={boardCardIds}
-        />
+        {loading ? (
+          <div style={{ width: 220, background: '#0d0a06', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#b8860b', fontFamily: 'Cocomat, sans-serif', fontSize: 10, letterSpacing: 2 }}>
+            LOADING...
+          </div>
+        ) : (
+          <Evidence
+            cards={availableCards}
+            onDragStart={handleSidebarDragStart}
+            boardCardIds={boardCardIds}
+          />
+        )}
 
         <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
 
@@ -306,14 +400,9 @@ const tabBtn = (tab: 'board' | 'address-book' | 'journal' | 'newspaper', label: 
                 <line x1="180" y1="0" x2="160" y2="650" stroke="rgba(120,90,40,0.35)" strokeWidth="16" />
                 <line x1="500" y1="0" x2="480" y2="650" stroke="rgba(120,90,40,0.3)" strokeWidth="14" />
                 <line x1="780" y1="0" x2="800" y2="650" stroke="rgba(120,90,40,0.28)" strokeWidth="13" />
-                <rect x="200" y="50"  width="260" height="120" rx="3" fill="rgba(160,125,60,0.15)" stroke="rgba(120,90,40,0.2)" strokeWidth="0.5" />
-                <rect x="510" y="50"  width="250" height="110" rx="3" fill="rgba(160,125,60,0.15)" stroke="rgba(120,90,40,0.2)" strokeWidth="0.5" />
-                <rect x="200" y="230" width="260" height="170" rx="3" fill="rgba(160,125,60,0.15)" stroke="rgba(120,90,40,0.2)" strokeWidth="0.5" />
-                <rect x="510" y="220" width="250" height="180" rx="3" fill="rgba(160,125,60,0.15)" stroke="rgba(120,90,40,0.2)" strokeWidth="0.5" />
-                <rect x="200" y="460" width="560" height="170" rx="3" fill="rgba(160,125,60,0.12)" stroke="rgba(120,90,40,0.2)" strokeWidth="0.5" />
-                <text x="500" y="192" fill="rgba(100,75,30,0.45)" fontSize="9" fontFamily="Courier Prime,monospace" textAnchor="middle" letterSpacing="3">VICTORIA AVENUE</text>
-                <text x="500" y="430" fill="rgba(100,75,30,0.45)" fontSize="9" fontFamily="Courier Prime,monospace" textAnchor="middle" letterSpacing="3">KING EDWARD STREET</text>
-                <text x="170" y="340" fill="rgba(100,75,30,0.4)" fontSize="8" fontFamily="Courier Prime,monospace" textAnchor="middle" letterSpacing="2" transform="rotate(-90,170,340)">CROWN LANE</text>
+                <text x="500" y="192" fill="rgba(100,75,30,0.45)" fontSize="9" fontFamily="Courier Prime,monospace" textAnchor="middle" letterSpacing="3">OAK AVENUE</text>
+                <text x="500" y="430" fill="rgba(100,75,30,0.45)" fontSize="9" fontFamily="Courier Prime,monospace" textAnchor="middle" letterSpacing="3">MAIN STREET</text>
+                <text x="170" y="340" fill="rgba(100,75,30,0.4)" fontSize="8" fontFamily="Courier Prime,monospace" textAnchor="middle" letterSpacing="2" transform="rotate(-90,170,340)">PINE AVENUE</text>
               </svg>
 
               {locations.map(loc => {
@@ -328,7 +417,7 @@ const tabBtn = (tab: 'board' | 'address-book' | 'journal' | 'newspaper', label: 
                     style={{ position: 'absolute', left: loc.x / 100 * bw, top: loc.y / 100 * bh, transform: 'translate(-50%,-50%)', display: 'flex', flexDirection: 'column', alignItems: 'center', cursor: 'pointer', zIndex: 3 }}
                   >
                     <div style={{ width: 14, height: 14, borderRadius: '50%', background: loc.visited ? '#cc2222' : '#6a5a3a', border: `2px solid ${loc.visited ? '#8b1a1a' : '#4a3a20'}`, boxShadow: loc.visited ? '0 0 8px rgba(200,30,30,.5)' : 'none', transition: 'all .2s' }} />
-                    <div style={{ fontFamily: 'Special Elite, cursive', fontSize: 9, background: 'rgba(15,10,5,.85)', color: loc.visited ? '#ff9a9a' : 'var(--gold)', padding: '2px 5px', marginTop: 3, letterSpacing: 1, whiteSpace: 'nowrap', border: '1px solid #2a1f0a' }}>
+                    <div style={{ fontFamily: 'Remington, monospace', fontSize: 9, background: 'rgba(15,10,5,.85)', color: loc.visited ? '#ff9a9a' : 'var(--gold)', padding: '2px 5px', marginTop: 3, letterSpacing: 1, whiteSpace: 'nowrap', border: '1px solid #2a1f0a' }}>
                       {loc.name}
                     </div>
                   </div>
@@ -360,7 +449,11 @@ const tabBtn = (tab: 'board' | 'address-book' | 'journal' | 'newspaper', label: 
                 <BoardCard key={card.id} card={card}
                   onMove={moveCard} onRemove={removeCard} onConnect={startConnect}
                   onViewFile={id => setModal({ card: boardCards[id] })}
-                  onOpenDoc={id => { const c = boardCards[id]; if (c?.doc) setDoc(c.doc) }}
+                  onOpenDoc={id => {
+                    const c = boardCards[id] as any
+                    if (c?._docUrl) setDoc({ title: c.name, url: c._docUrl })
+                    else if (c?.doc) setDoc({ title: c.doc.title, url: c.doc.content })
+                  }}
                   isConnecting={!!connectingFrom} isSource={connectingFrom === card.id}
                   onConnectTarget={id => completeConnect(id, card.type)}
                   onNoteChange={(id, note) => setBoardCards(prev => ({ ...prev, [id]: { ...prev[id], note } }))}
@@ -370,24 +463,28 @@ const tabBtn = (tab: 'board' | 'address-book' | 'journal' | 'newspaper', label: 
 
               {connectingFrom && (
                 <div style={{ position: 'absolute', top: 10, left: '50%', transform: 'translateX(-50%)', background: 'rgba(10,5,0,.95)', border: '1px solid var(--gold)', padding: '8px 18px', zIndex: 200, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 7, minWidth: 340 }}>
-                  <div style={{ fontFamily: 'Special Elite, cursive', color: 'var(--gold)', fontSize: 11, letterSpacing: 2 }}>Select connection type - then click target</div>
+                  <div style={{ fontFamily: 'Cocomat, sans-serif', fontWeight: 300, color: 'var(--gold)', fontSize: 11, letterSpacing: 2 }}>Select connection type — then click target</div>
                   <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', justifyContent: 'center' }}>
                     {availableStringTypes.map(t => (
-                      <button key={t} onClick={() => setStringType(t)} style={{ fontSize: 8, padding: '2px 8px', border: `1px solid ${stringType === t ? STRING_COLORS[t] : '#2a1f0a'}`, background: stringType === t ? '#1a0f00' : 'transparent', color: stringType === t ? STRING_COLORS[t] : '#6a5a3a', cursor: 'pointer', letterSpacing: 1, textTransform: 'uppercase', fontFamily: 'Courier Prime, monospace' }}>
+                      <button key={t} onClick={() => setStringType(t)} style={{ fontSize: 8, padding: '2px 8px', border: `1px solid ${stringType === t ? STRING_COLORS[t] : '#2a1f0a'}`, background: stringType === t ? '#1a0f00' : 'transparent', color: stringType === t ? STRING_COLORS[t] : '#6a5a3a', cursor: 'pointer', letterSpacing: 1, textTransform: 'uppercase', fontFamily: 'Cocomat, sans-serif', fontWeight: 300 }}>
                         {STRING_LABELS[t]}
                       </button>
                     ))}
                   </div>
-                  <button onClick={() => setConnectingFrom(null)} style={{ fontSize: 8, color: '#3a2a10', cursor: 'pointer', letterSpacing: 1, textTransform: 'uppercase', fontFamily: 'Courier Prime, monospace', background: 'none', border: 'none', textDecoration: 'underline' }}>Cancel</button>
+                  <button onClick={() => setConnectingFrom(null)} style={{ fontSize: 8, color: '#3a2a10', cursor: 'pointer', letterSpacing: 1, textTransform: 'uppercase', fontFamily: 'Cocomat, sans-serif', background: 'none', border: 'none', textDecoration: 'underline' }}>Cancel</button>
                 </div>
               )}
 
-              <div style={{ position: 'absolute', bottom: 12, right: 12, background: 'rgba(8,4,0,.96)', border: '1px solid #6a5a3a', padding: '10px 14px', zIndex: 50 }}>
-                <div style={{ fontFamily: 'Special Elite, cursive', color: 'var(--gold)', fontSize: 10, letterSpacing: 2, marginBottom: 7, borderBottom: '1px solid #3a2a10', paddingBottom: 5 }}>Strings</div>
+              <div style={{ position: 'absolute', bottom: 12, right: 12, background: 'rgba(8,4,0,.96)', border: '1px solid rgba(184,134,11,0.3)', padding: '12px 16px', zIndex: 50 }}>
+                <div style={{ fontFamily: 'Cocomat, sans-serif', fontWeight: 300, color: '#b8860b', fontSize: 9, letterSpacing: 5, textTransform: 'uppercase', marginBottom: 10, borderBottom: '1px solid rgba(184,134,11,0.2)', paddingBottom: 8 }}>
+                  Strings
+                </div>
                 {Object.entries(STRING_LABELS).map(([key, label]) => (
-                  <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 5 }}>
-                    <div style={{ width: 28, height: 2.5, flexShrink: 0, borderRadius: 1, background: STRING_COLORS[key], boxShadow: `0 0 4px ${STRING_COLORS[key]}88` }} />
-                    <div style={{ fontSize: 10, color: '#c8b88a', letterSpacing: 1, textTransform: 'uppercase' }}>{label}</div>
+                  <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 6 }}>
+                    <svg width="28" height="8" style={{ flexShrink: 0 }}>
+                      <line x1="0" y1="4" x2="28" y2="4" stroke={STRING_COLORS[key]} strokeWidth={['suspects', 'was-there'].includes(key) ? 3 : 2.5} strokeDasharray={['contradicts', 'found-at', 'based-on'].includes(key) ? '7 4' : undefined} strokeLinecap="round" />
+                    </svg>
+                    <div style={{ fontFamily: 'Cocomat, sans-serif', fontWeight: 200, fontSize: 9, color: '#e8dfc4', letterSpacing: 2, textTransform: 'uppercase' }}>{label}</div>
                   </div>
                 ))}
               </div>
@@ -395,36 +492,19 @@ const tabBtn = (tab: 'board' | 'address-book' | 'journal' | 'newspaper', label: 
           </div>
 
           {/* Address Book tab */}
-{/* Address Book tab */}
-<div style={{ display: activeTab === 'address-book' ? 'flex' : 'none', width: '100%', height: '100%' }}>
-  <AddressBook />
-</div>
+          <div style={{ display: activeTab === 'address-book' ? 'flex' : 'none', width: '100%', height: '100%' }}>
+            <AddressBook />
+          </div>
 
-{/* Journal tab */}
-<div style={{ display: activeTab === 'journal' ? 'flex' : 'none', width: '100%', height: '100%' }}>
-  <Journal
-    entries={journalEntries}
-    timeRemaining={timerSecs}
-    onVisit={(entry) => {
-      const n = visitCount + 1
-      setVisitCount(n)
-      setTimerSecs(s => Math.max(0, s - 10 * 60))
-      const je: JournalEntry = {
-        id: entry.id + '-' + Date.now(),
-        entryNumber: n,
-        locationId: entry.id,
-        locationName: entry.name,
-        address: entry.address,
-        sceneText: 'You arrive at ' + entry.name + '. The place is quiet. You look around carefully but find nothing of immediate interest.',
-        hasClue: false,
-        costMinutes: 10,
-        timestamp: new Date(),
-      }
-      setJournalEntries(prev => [...prev, je])
-      return je
-    }}
-  />
-</div>
+          {/* Journal tab */}
+          <div style={{ display: activeTab === 'investigation' ? 'flex' : 'none', width: '100%', height: '100%' }}>
+            <Journal
+              entries={journalEntries}
+              timeRemaining={timerSecs}
+              onVisit={handleVisit}
+            />
+          </div>
+
           {/* Newspaper tab */}
           <div style={{ display: activeTab === 'newspaper' ? 'flex' : 'none', width: '100%', height: '100%' }}>
             <Newspaper pdfUrl={NEWSPAPER_URL} title="Daily Pines - Vol. 10, No. 4" />
@@ -434,13 +514,21 @@ const tabBtn = (tab: 'board' | 'address-book' | 'journal' | 'newspaper', label: 
       </div>
 
       {/* Status bar */}
-<div style={{ background: 'var(--sidebar)', borderTop: '1px solid #3a2a10', padding: '6px 20px', display: 'flex', gap: 24, flexShrink: 0, alignItems: 'center' }}>        {[
+      <div style={{
+        background: '#0a0805', borderTop: '1px solid rgba(184,134,11,0.2)',
+        padding: '6px 24px', display: 'flex', gap: 32, flexShrink: 0, alignItems: 'center',
+      }}>
+        {[
           ['Cards on board', Object.keys(boardCards).length],
           ['Connections', strings.length],
           ['Time remaining', formatTime(timerSecs)],
           ['Moves used', movesUsed],
         ].map(([label, val]) => (
-<div key={label as string} style={{ fontSize: 12, color: '#8a7a5a', letterSpacing: 1, textTransform: 'uppercase', fontFamily: 'Courier Prime, monospace' }}>            {label}: <span style={{ color: 'var(--gold)' }}>{val}</span>
+          <div key={label as string} style={{
+            fontFamily: 'Cocomat, sans-serif', fontWeight: 200,
+            fontSize: 10, color: '#e8dfc4', letterSpacing: 3, textTransform: 'uppercase',
+          }}>
+            {label}: <span style={{ color: '#b8860b', fontWeight: 300 }}>{val}</span>
           </div>
         ))}
       </div>
@@ -452,53 +540,61 @@ const tabBtn = (tab: 'board' | 'address-book' | 'journal' | 'newspaper', label: 
           <div style={{ background: 'var(--paper)', border: '2px solid var(--paper-dark)', maxWidth: 400, width: '90%', boxShadow: '4px 8px 30px rgba(0,0,0,.7)' }}>
             <div style={{ background: 'var(--paper-aged)', borderBottom: '1px solid var(--paper-dark)', padding: '10px 14px', display: 'flex', justifyContent: 'space-between' }}>
               <div>
-                <div style={{ fontSize: 8, letterSpacing: 2, textTransform: 'uppercase', fontWeight: 700, marginBottom: 3, color: '#8b6914' }}>{modal.card.type}</div>
-                <div style={{ fontFamily: 'Special Elite, cursive', fontSize: 16, color: 'var(--ink)' }}>{modal.card.name}</div>
+                <div style={{ fontSize: 8, letterSpacing: 2, textTransform: 'uppercase', fontWeight: 700, marginBottom: 3, color: '#8b6914', fontFamily: 'Cocomat, sans-serif' }}>{modal.card.type}</div>
+                <div style={{ fontFamily: 'Remington, monospace', fontSize: 16, color: 'var(--ink)' }}>{modal.card.name}</div>
               </div>
-              <button onClick={() => setModal(null)} style={{ background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: 'var(--ink-faded)' }}>x</button>
+              <button onClick={() => setModal(null)} style={{ background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: 'var(--ink-faded)' }}>×</button>
             </div>
             <div style={{ padding: '12px 14px' }}>
-              <div style={{ fontSize: 11, color: 'var(--ink-faded)', lineHeight: 1.7, fontStyle: 'italic', marginBottom: 10 }}>{modal.card.desc}</div>
-              {modal.card.meta && Object.entries(modal.card.meta).map(([k, v]) => (
-                <div key={k} style={{ display: 'flex', gap: 8, fontSize: 10, marginBottom: 3 }}>
-                  <div style={{ color: '#8a7a5a', letterSpacing: 1, textTransform: 'uppercase', minWidth: 72 }}>{k}</div>
-                  <div style={{ color: 'var(--ink)' }}>{v}</div>
+              {/* Dosie layout: photo left, info right */}
+              <div style={{ display: 'flex', gap: 14, marginBottom: 12 }}>
+                {modal.card.photo && (
+                  <img src={modal.card.photo} alt="" style={{
+                    width: 90, height: 110, flexShrink: 0,
+                    objectFit: 'cover', objectPosition: 'center 10%',
+                    filter: 'sepia(60%) contrast(1.1)',
+                    border: '1px solid var(--paper-dark)',
+                  }} />
+                )}
+                <div style={{ flex: 1 }}>
+                  {modal.card.type === 'witness' && (
+                    <>
+                      <div style={{ fontSize: 8, letterSpacing: 1, textTransform: 'uppercase', color: '#8a7a5a', marginBottom: 5, fontFamily: 'Cocomat, sans-serif' }}>Status</div>
+                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 10 }}>
+                        {(['witness', 'suspect', 'poi', 'alibi'] as StatusType[]).map(s => (
+                          <button key={s} onClick={() => {
+                            setBoardCards(prev => ({ ...prev, [modal.card.id]: { ...prev[modal.card.id], status: s } }))
+                            setModal(prev => prev ? { card: { ...prev.card, status: s } } : null)
+                          }} style={{ fontSize: 8, padding: '2px 8px', cursor: 'pointer', border: '1px solid', background: 'transparent', fontFamily: 'Cocomat, sans-serif', letterSpacing: 1, textTransform: 'uppercase',
+                            color: modal.card.status === s ? 'var(--gold)' : '#8a7a5a',
+                            borderColor: modal.card.status === s ? 'var(--gold)' : '#c8b88a',
+                          }}>{s}</button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                  {modal.card.meta && Object.entries(modal.card.meta).map(([k, v]) => (
+                    <div key={k} style={{ display: 'flex', gap: 8, fontSize: 10, marginBottom: 4 }}>
+                      <div style={{ color: '#8a7a5a', letterSpacing: 1, textTransform: 'uppercase', minWidth: 72, fontFamily: 'Cocomat, sans-serif', fontWeight: 200 }}>{k}</div>
+                      <div style={{ color: 'var(--ink)', fontFamily: 'Remington, monospace' }}>{v}</div>
+                    </div>
+                  ))}
                 </div>
-              ))}
-              {modal.card.type === 'witness' && (
-                <div style={{ marginTop: 10, borderTop: '1px dashed var(--paper-dark)', paddingTop: 8 }}>
-                  <div style={{ fontSize: 8, letterSpacing: 1, textTransform: 'uppercase', color: '#8a7a5a', marginBottom: 5 }}>Status</div>
-                  <div style={{ display: 'flex', gap: 4 }}>
-                    {(['witness', 'suspect', 'poi', 'alibi'] as StatusType[]).map(s => (
-                      <button key={s} onClick={() => {
-                        setBoardCards(prev => ({ ...prev, [modal.card.id]: { ...prev[modal.card.id], status: s } }))
-                        setModal(null)
-                      }} style={{ fontSize: 8, padding: '2px 8px', cursor: 'pointer', border: '1px solid #c8b88a', background: 'transparent', color: modal.card.status === s ? 'var(--gold)' : '#8a7a5a', borderColor: modal.card.status === s ? 'var(--gold)' : '#c8b88a', fontFamily: 'Courier Prime, monospace', letterSpacing: 1, textTransform: 'uppercase' }}>
-                        {s}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
+              </div>
+              <div style={{ fontFamily: 'Ovo, serif', fontSize: 13, color: 'var(--ink-faded)', lineHeight: 1.8 }}>{modal.card.desc}</div>
             </div>
           </div>
         </div>
       )}
 
-      {/* Doc viewer */}
+      {/* Doc viewer — PDF iframe */}
       {doc && (
         <div style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', background: 'rgba(3,2,0,.92)', zIndex: 400, display: 'flex', flexDirection: 'column' }}>
           <div style={{ background: '#0d0a06', borderBottom: '1px solid #2a1f0a', padding: '8px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div style={{ fontFamily: 'Special Elite, cursive', color: 'var(--gold)', fontSize: 13, letterSpacing: 2 }}>{doc.title}</div>
-            <button onClick={() => setDoc(null)} style={{ ...topBtnStyle, borderColor: 'var(--red)', color: '#cc2222' }}>x Close</button>
+            <div style={{ fontFamily: 'ParkLane, serif', color: 'var(--gold)', fontSize: 13, letterSpacing: 2 }}>{doc.title}</div>
+            <button onClick={() => setDoc(null)} style={{ ...topBtnStyle, borderColor: '#cc4444', color: '#cc4444' }}>× Close</button>
           </div>
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#2a2015' }}>
-            <div style={{ width: 360, background: 'var(--paper)', border: '1px solid var(--paper-dark)', padding: 30, boxShadow: '0 4px 20px rgba(0,0,0,.5)' }}>
-              <div style={{ fontFamily: 'Special Elite, cursive', fontSize: 8, letterSpacing: 3, color: '#5a4a2a', textTransform: 'uppercase', border: '2px solid #5a4a2a', padding: '3px 8px', display: 'inline-block', transform: 'rotate(-2deg)', marginBottom: 14 }}>Evidence document</div>
-              <div style={{ fontFamily: 'Special Elite, cursive', fontSize: 16, color: 'var(--ink)', marginBottom: 10, borderBottom: '1px solid var(--paper-dark)', paddingBottom: 8 }}>{doc.title}</div>
-              <div style={{ fontSize: 10, color: 'var(--ink-faded)', lineHeight: 1.8, whiteSpace: 'pre-line' }}>{doc.content}</div>
-            </div>
-          </div>
+          <iframe src={doc.url} style={{ flex: 1, border: 'none', width: '100%' }} title={doc.title} />
         </div>
       )}
     </div>
@@ -506,8 +602,12 @@ const tabBtn = (tab: 'board' | 'address-book' | 'journal' | 'newspaper', label: 
 }
 
 const topBtnStyle: React.CSSProperties = {
-  fontFamily: 'Courier Prime, monospace',
-  fontSize: 10, letterSpacing: 1, textTransform: 'uppercase',
-  padding: '5px 12px', border: '1px solid var(--gold)',
-  background: 'transparent', color: 'var(--gold)', cursor: 'pointer',
+  fontFamily: 'Cocomat, sans-serif',
+  fontWeight: 300,
+  fontSize: 9, letterSpacing: 2, textTransform: 'uppercase',
+  padding: '4px 10px',
+  border: '1px solid #b8860b',
+  background: 'transparent', color: '#b8860b', cursor: 'pointer',
+  whiteSpace: 'nowrap',
+  clipPath: 'polygon(5px 0%, calc(100% - 5px) 0%, 100% 5px, 100% calc(100% - 5px), calc(100% - 5px) 100%, 5px 100%, 0% calc(100% - 5px), 0% 5px)',
 }

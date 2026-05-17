@@ -28,9 +28,15 @@ interface BoardCardProps {
 const STATUS_ORDER: StatusType[] = ['witness', 'suspect', 'poi', 'alibi']
 
 const TYPE_COLORS: Record<string, string> = {
-  witness: '#d4a017',
-  clue: '#c87a3a',
+  witness:    '#b8860b',
+  clue:       '#c87a3a',
   hypothesis: '#7a4ad4',
+}
+
+const TYPE_LABEL_COLORS: Record<string, string> = {
+  witness:    '#8b6914',
+  clue:       '#8b4a1a',
+  hypothesis: '#4a2a9a',
 }
 
 const statusStyles: Record<StatusType, React.CSSProperties> = {
@@ -74,15 +80,17 @@ export default function BoardCard({
   const topColor = TYPE_COLORS[card.type] || '#888'
 
   const btnBase: React.CSSProperties = {
+    fontFamily: 'Cocomat, sans-serif',
+    fontWeight: 300,
     fontSize: 8,
-    letterSpacing: 1,
+    letterSpacing: 2,
     textTransform: 'uppercase',
     padding: '4px 8px',
     cursor: 'pointer',
-    fontFamily: 'Courier Prime, monospace',
-    minHeight: 28,
+    minHeight: 26,
     whiteSpace: 'nowrap',
     background: 'none',
+    clipPath: 'polygon(4px 0%, calc(100% - 4px) 0%, 100% 4px, 100% calc(100% - 4px), calc(100% - 4px) 100%, 4px 100%, 0% calc(100% - 4px), 0% 4px)',
   }
 
   return (
@@ -92,14 +100,14 @@ export default function BoardCard({
         position: 'absolute',
         left: card.x, top: card.y,
         width: 185,
-        background: card.type === 'hypothesis' ? '#f0ecf8' : 'var(--paper)',
-        border: '1px solid var(--paper-dark)',
+        background: card.type === 'hypothesis' ? '#f0ecf8' : '#f5f0e1',
+        border: '1px solid #c8b88a',
         borderTop: `3px solid ${topColor}`,
         cursor: isConnecting && !isSource ? 'crosshair' : 'move',
         zIndex: isSource ? 100 : 10,
         boxShadow: isSource
-          ? '0 0 0 2px var(--gold), 2px 4px 10px rgba(0,0,0,.4)'
-          : '2px 4px 10px rgba(0,0,0,.4)',
+          ? '0 0 0 2px #b8860b, 2px 4px 12px rgba(0,0,0,.5)'
+          : '2px 4px 12px rgba(0,0,0,.4)',
       }}
     >
       {/* Pin */}
@@ -115,18 +123,19 @@ export default function BoardCard({
       <div style={{
         display: 'flex', gap: 10,
         padding: '10px 10px 8px',
-        borderBottom: '1px dashed var(--paper-dark)',
+        borderBottom: '1px dashed #c8b88a',
         alignItems: 'flex-start',
       }}>
+        {/* Avatar */}
         <div style={{
           width: 48, height: 56, flexShrink: 0,
           background: '#c8b88a',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: card.type === 'clue' ? 22 : 16,
-          fontWeight: 700, color: '#7a5a2a',
-          border: '1px solid var(--paper-dark)',
+          fontSize: card.type === 'clue' ? 22 : 14,
+          fontWeight: 700, color: '#5a3a10',
+          border: '1px solid #a89870',
           overflow: 'hidden',
-          fontFamily: 'Special Elite, cursive',
+          fontFamily: 'Remington, monospace',
         }}>
           {card.photo
             ? <img src={card.photo} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'center top', filter: 'sepia(70%) contrast(1.15) brightness(.85)' }} />
@@ -135,15 +144,16 @@ export default function BoardCard({
         </div>
 
         <div style={{ flex: 1, minWidth: 0 }}>
+          {/* Type label */}
           <div style={{
-            fontSize: 9, letterSpacing: 2, textTransform: 'uppercase',
-            fontWeight: 700, marginBottom: 4,
-            color: card.type === 'witness' ? '#8b6914' : card.type === 'clue' ? '#8b4a1a' : '#4a2a9a',
-            fontFamily: 'Courier Prime, monospace',
+            fontFamily: 'Cocomat, sans-serif', fontWeight: 300,
+            fontSize: 8, letterSpacing: 2, textTransform: 'uppercase',
+            marginBottom: 4, color: TYPE_LABEL_COLORS[card.type] || '#888',
           }}>
             {card.type}
           </div>
 
+          {/* Status badge — only for witnesses, clickable */}
           {card.type === 'witness' && (
             <div
               onClick={() => {
@@ -151,10 +161,11 @@ export default function BoardCard({
                 onStatusChange(card.id, STATUS_ORDER[(idx + 1) % STATUS_ORDER.length])
               }}
               style={{
-                display: 'inline-block', fontSize: 9, letterSpacing: 1,
-                textTransform: 'uppercase', padding: '2px 6px',
-                border: '1px solid', marginBottom: 4, cursor: 'pointer',
-                fontFamily: 'Courier Prime, monospace',
+                display: 'inline-block',
+                fontFamily: 'Cocomat, sans-serif', fontWeight: 300,
+                fontSize: 8, letterSpacing: 1, textTransform: 'uppercase',
+                padding: '2px 6px', border: '1px solid',
+                marginBottom: 4, cursor: 'pointer',
                 ...statusStyles[card.status],
               }}
             >
@@ -162,9 +173,10 @@ export default function BoardCard({
             </div>
           )}
 
+          {/* Name */}
           <div style={{
-            fontFamily: 'Special Elite, cursive',
-            fontSize: 13, color: 'var(--ink)', lineHeight: 1.3,
+            fontFamily: 'Remington, monospace',
+            fontSize: 13, color: '#1a1208', lineHeight: 1.3,
           }}>
             {card.name}
           </div>
@@ -179,10 +191,10 @@ export default function BoardCard({
           rows={2}
           placeholder="Add note..."
           style={{
+            fontFamily: 'Ovo, serif',
             fontSize: 11, color: '#4a3820', lineHeight: 1.5,
             outline: 'none', width: '100%',
             background: 'transparent', border: 'none', resize: 'none',
-            fontFamily: 'Courier Prime, monospace',
             cursor: 'text', userSelect: 'text',
           }}
         />
@@ -191,22 +203,22 @@ export default function BoardCard({
         <div style={{
           display: 'flex', justifyContent: 'space-between',
           alignItems: 'center', marginTop: 5,
-          borderTop: '1px dashed var(--paper-dark)', paddingTop: 6,
+          borderTop: '1px dashed #c8b88a', paddingTop: 6,
           gap: 4,
         }}>
           {card.type === 'clue' ? (
             <button onClick={() => onOpenDoc(card.id)} style={{
               ...btnBase,
-              border: '1px solid #5a2a08',
-              color: '#5a2a08',
+              border: '1px solid #8b4a1a',
+              color: '#8b4a1a',
             }}>
               Doc
             </button>
           ) : (
             <button onClick={() => onViewFile(card.id)} style={{
               ...btnBase,
-              border: '1px solid #5a2a08',
-              color: '#5a2a08',
+              border: '1px solid #8b6914',
+              color: '#8b6914',
             }}>
               View file
             </button>
@@ -214,22 +226,23 @@ export default function BoardCard({
 
           <button onClick={() => onConnect(card.id)} style={{
             ...btnBase,
-            border: `1px solid ${isSource ? 'var(--gold)' : '#7a6a4a'}`,
+            border: `1px solid ${isSource ? '#b8860b' : '#7a6a4a'}`,
             background: isSource ? '#1a0f00' : 'none',
-            color: isSource ? 'var(--gold)' : '#4a3820',
+            color: isSource ? '#b8860b' : '#4a3820',
           }}>
             + String
           </button>
 
           <button onClick={() => onRemove(card.id)} style={{
-            fontSize: 14,
+            fontFamily: 'Cocomat, sans-serif',
+            fontSize: 12,
             background: 'none',
             border: 'none',
             cursor: 'pointer',
-            opacity: 0.45,
-            color: 'var(--ink)',
-            minWidth: 28,
-            minHeight: 28,
+            opacity: 0.4,
+            color: '#1a1208',
+            minWidth: 26,
+            minHeight: 26,
             padding: '0 4px',
           }}>
             ✕
