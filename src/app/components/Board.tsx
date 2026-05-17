@@ -8,7 +8,6 @@ import AddressBook from './AddressBook'
 import Journal, { JournalEntry } from './Journal'
 import { supabase } from '@/lib/supabase'
 
-const CASE_ID = '9449b4d3-8567-42c9-b376-e3a260f15498'
 const NEWSPAPER_URL = 'https://cgpeozfkxrdqtqmbrcnh.supabase.co/storage/v1/object/public/newspaper/newspaper_test.pdf'
 
 interface LocationPin {
@@ -40,6 +39,13 @@ interface TeamData {
   name: string
   code: string
   event_id: string
+}
+
+interface CaseInfo {
+  id: string
+  title: string
+  year: number
+  city: string
 }
 
 const STRING_TYPES: Record<string, string[]> = {
@@ -83,6 +89,7 @@ export default function Board() {
   const [loading, setLoading] = useState(true)
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'unsaved'>('saved')
   const [team, setTeam] = useState<TeamData | null>(null)
+  const [caseInfo, setCaseInfo] = useState<CaseInfo | null>(null)
 
   const [boardCards, setBoardCards] = useState<Record<string, BoardCardData>>({})
   const [strings, setStrings] = useState<StringData[]>([])
@@ -113,6 +120,7 @@ export default function Board() {
   useEffect(() => { hypothesisCountRef.current = hypothesisCount }, [hypothesisCount])
 
   const sessionIdRef = useRef<string | null>(null)
+  const caseIdRef = useRef<string | null>(null)
   const isRestoringRef = useRef(false)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const boardChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null)
@@ -125,12 +133,39 @@ export default function Board() {
   useEffect(() => {
     async function init() {
       setLoading(true)
-      await loadCaseData()
 
       const t = getTeam()
       if (t) {
         setTeam(t)
-        const sessionId = await findOrCreateSession(t)
+
+        // Get case_id from event
+        const { data: eventData } = await supabase
+          .from('events')
+          .select('case_id')
+          .eq('id', t.event_id)
+          .single()
+
+        const caseId = eventData?.case_id
+        if (!caseId) {
+          console.error('No case_id found for event', t.event_id)
+          setLoading(false)
+          return
+        }
+        caseIdRef.current = caseId
+
+        // Load case info for display
+        const { data: caseData } = await supabase
+          .from('cases')
+          .select('id, title, year, city')
+          .eq('id', caseId)
+          .single()
+        if (caseData) setCaseInfo(caseData)
+
+        // Load case data (locations, chars, clues)
+        await loadCaseData(caseId)
+
+        // Find or create session
+        const sessionId = await findOrCreateSession(t, caseId)
         sessionIdRef.current = sessionId
         if (sessionId) {
           await restoreBoard(sessionId)
@@ -143,69 +178,55 @@ export default function Board() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // ─── Realtime subscription — fires after loading completes ─────────────────
+  // ─── Realtime subscription ─────────────────────────────────────────────────
 
- useEffect(() => {
-  const sessionId = sessionIdRef.current
-  if (!sessionId) return
+  useEffect(() => {
+    const sessionId = sessionIdRef.current
+    if (!sessionId) return
 
-  const channelName = `board-${sessionId}`
+    const channelName = `board-${sessionId}`
+    const existing = supabase.getChannels().find(c => c.topic === `realtime:${channelName}`)
+    if (existing) supabase.removeChannel(existing)
 
-  // Remove existing channel with this name if any
-  const existing = supabase.getChannels().find(c => c.topic === `realtime:${channelName}`)
-  if (existing) {
-    supabase.removeChannel(existing)
-  }
-
-  const channel = supabase
-    .channel(channelName)
-    .on(
-      'postgres_changes',
-      {
-        event: 'UPDATE',
-        schema: 'public',
-        table: 'session_board',
-        filter: `session_id=eq.${sessionId}`,
-      },
-      (payload) => {
-        if (isRestoringRef.current) return
-        const data = payload.new as any
-        if (!data) return
-        isRestoringRef.current = true
-        if (data.cards && typeof data.cards === 'object') setBoardCards(data.cards)
-        if (Array.isArray(data.strings)) setStrings(data.strings)
-        if (Array.isArray(data.available_cards) && data.available_cards.length > 0) {
-          setAvailableCards(data.available_cards)
-          ;(window as any).__allCaseCards = [...((window as any).__allCaseCards || []), ...data.available_cards]
+    const channel = supabase
+      .channel(channelName)
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'session_board', filter: `session_id=eq.${sessionId}` },
+        (payload) => {
+          if (isRestoringRef.current) return
+          const data = payload.new as any
+          if (!data) return
+          isRestoringRef.current = true
+          if (data.cards && typeof data.cards === 'object') setBoardCards(data.cards)
+          if (Array.isArray(data.strings)) setStrings(data.strings)
+          if (Array.isArray(data.available_cards) && data.available_cards.length > 0) {
+            setAvailableCards(data.available_cards)
+            ;(window as any).__allCaseCards = [...((window as any).__allCaseCards || []), ...data.available_cards]
+          }
+          if (Array.isArray(data.journal_entries)) {
+            const entries = data.journal_entries as JournalEntry[]
+            setJournalEntries(entries)
+            const visitedIds = new Set(entries.filter(e => e.visitType === 'visit').map(e => e.locationId))
+            if (visitedIds.size > 0) setLocations(prev => prev.map(l => visitedIds.has(l.id) ? { ...l, visited: true } : l))
+          }
+          if (typeof data.timer_secs === 'number' && data.timer_secs > 0) setTimerSecs(data.timer_secs)
+          if (typeof data.hypothesis_count === 'number') setHypothesisCount(data.hypothesis_count)
+          setTimeout(() => { isRestoringRef.current = false }, 150)
         }
-        if (Array.isArray(data.journal_entries)) {
-          const entries = data.journal_entries as JournalEntry[]
-          setJournalEntries(entries)
-          const visitedIds = new Set(entries.filter(e => e.visitType === 'visit').map(e => e.locationId))
-          if (visitedIds.size > 0) setLocations(prev => prev.map(l => visitedIds.has(l.id) ? { ...l, visited: true } : l))
-        }
-        if (typeof data.timer_secs === 'number' && data.timer_secs > 0) setTimerSecs(data.timer_secs)
-        if (typeof data.hypothesis_count === 'number') setHypothesisCount(data.hypothesis_count)
-        setTimeout(() => { isRestoringRef.current = false }, 150)
-      }
-    )
-    .subscribe()
+      )
+      .subscribe()
 
-  boardChannelRef.current = channel
-
-  return () => {
-    supabase.removeChannel(channel)
-    boardChannelRef.current = null
-  }
-}, [loading])
+    boardChannelRef.current = channel
+    return () => { supabase.removeChannel(channel); boardChannelRef.current = null }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading])
 
   // ─── Timer ─────────────────────────────────────────────────────────────────
 
   useEffect(() => {
     const id = setInterval(() => {
-      if (!isRestoringRef.current) {
-        setTimerSecs(s => Math.max(0, s - 1))
-      }
+      if (!isRestoringRef.current) setTimerSecs(s => Math.max(0, s - 1))
     }, 1000)
     return () => clearInterval(id)
   }, [])
@@ -223,13 +244,13 @@ export default function Board() {
 
   // ─── Session ────────────────────────────────────────────────────────────────
 
-  async function findOrCreateSession(t: TeamData): Promise<string | null> {
+  async function findOrCreateSession(t: TeamData, caseId: string): Promise<string | null> {
     try {
       const { data: existing } = await supabase
         .from('sessions')
         .select('id')
         .eq('login_code', t.code)
-        .eq('case_id', CASE_ID)
+        .eq('case_id', caseId)
         .eq('is_active', true)
         .single()
 
@@ -238,7 +259,7 @@ export default function Board() {
       const { data: created, error: insertError } = await supabase
         .from('sessions')
         .insert({
-          case_id: CASE_ID,
+          case_id: caseId,
           team_name: t.name,
           login_code: t.code,
           is_active: true,
@@ -269,36 +290,21 @@ export default function Board() {
 
       isRestoringRef.current = true
 
-      if (data.cards && typeof data.cards === 'object') {
-        setBoardCards(data.cards as Record<string, BoardCardData>)
-      }
-      if (Array.isArray(data.strings)) {
-        setStrings(data.strings as StringData[])
-      }
+      if (data.cards && typeof data.cards === 'object') setBoardCards(data.cards as Record<string, BoardCardData>)
+      if (Array.isArray(data.strings)) setStrings(data.strings as StringData[])
       if (Array.isArray(data.available_cards) && data.available_cards.length > 0) {
         const cards = data.available_cards as CardData[]
         setAvailableCards(cards)
-        ;(window as any).__allCaseCards = [
-          ...((window as any).__allCaseCards || []),
-          ...cards,
-        ]
+        ;(window as any).__allCaseCards = [...((window as any).__allCaseCards || []), ...cards]
       }
       if (Array.isArray(data.journal_entries)) {
         const entries = data.journal_entries as JournalEntry[]
         setJournalEntries(entries)
-        const visitedIds = new Set(
-          entries.filter(e => e.visitType === 'visit').map(e => e.locationId)
-        )
-        if (visitedIds.size > 0) {
-          setLocations(prev => prev.map(l => visitedIds.has(l.id) ? { ...l, visited: true } : l))
-        }
+        const visitedIds = new Set(entries.filter(e => e.visitType === 'visit').map(e => e.locationId))
+        if (visitedIds.size > 0) setLocations(prev => prev.map(l => visitedIds.has(l.id) ? { ...l, visited: true } : l))
       }
-      if (typeof data.timer_secs === 'number' && data.timer_secs > 0) {
-        setTimerSecs(data.timer_secs)
-      }
-      if (typeof data.hypothesis_count === 'number') {
-        setHypothesisCount(data.hypothesis_count)
-      }
+      if (typeof data.timer_secs === 'number' && data.timer_secs > 0) setTimerSecs(data.timer_secs)
+      if (typeof data.hypothesis_count === 'number') setHypothesisCount(data.hypothesis_count)
 
       setTimeout(() => { isRestoringRef.current = false }, 150)
     } catch (err) {
@@ -312,9 +318,7 @@ export default function Board() {
   const saveSnapshot = useCallback(async () => {
     const sessionId = sessionIdRef.current
     if (!sessionId || isRestoringRef.current) return
-
     setSaveStatus('saving')
-
     const { error } = await supabase
       .from('session_board')
       .upsert({
@@ -327,19 +331,18 @@ export default function Board() {
         hypothesis_count: hypothesisCountRef.current,
         updated_at: new Date().toISOString(),
       }, { onConflict: 'session_id' })
-
     setSaveStatus(error ? 'unsaved' : 'saved')
     if (error) console.error('saveSnapshot:', error)
   }, [])
 
   // ─── Load case data ─────────────────────────────────────────────────────────
 
-  async function loadCaseData() {
+  async function loadCaseData(caseId: string) {
     try {
       const { data: caseLocations } = await supabase
         .from('case_locations')
         .select('location_id, is_active, scene_text, locations(id, name, x, y, address, phone)')
-        .eq('case_id', CASE_ID)
+        .eq('case_id', caseId)
 
       if (caseLocations) {
         setLocations(caseLocations.map((cl: any) => ({
@@ -354,13 +357,13 @@ export default function Board() {
       const { data: caseChars } = await supabase
         .from('case_characters')
         .select('character_id, current_location_id, role, is_active, visit_text, characters(id, name, photo_url, occupation)')
-        .eq('case_id', CASE_ID)
+        .eq('case_id', caseId)
         .eq('is_active', true)
 
       const { data: caseClues } = await supabase
         .from('case_clues')
         .select('id, name, description, found_at_location_id, document_url')
-        .eq('case_id', CASE_ID)
+        .eq('case_id', caseId)
 
       const cards: CardData[] = []
 
@@ -467,9 +470,7 @@ export default function Board() {
       (s.from === connectingFrom && s.to === toId) ||
       (s.from === toId && s.to === connectingFrom)
     )
-    if (!exists) {
-      setStrings(prev => [...prev, { from: connectingFrom, to: toId, type: stringType, toType }])
-    }
+    if (!exists) setStrings(prev => [...prev, { from: connectingFrom, to: toId, type: stringType, toType }])
     setConnectingFrom(null)
   }
 
@@ -537,6 +538,7 @@ export default function Board() {
 
   const boardCardIds = new Set(Object.keys(boardCards))
   const availableStringTypes = connectingFrom ? STRING_TYPES[boardCards[connectingFrom]?.type] || [] : []
+  const caseLabel = caseInfo ? `${caseInfo.title.toUpperCase()} — ${caseInfo.city}, ${caseInfo.year}` : '...'
 
   const tabBtn = (tab: typeof activeTab, label: string) => (
     <button key={tab} onClick={() => setActiveTab(tab)} style={{
@@ -575,7 +577,7 @@ export default function Board() {
         </div>
 
         <div style={{ fontFamily: 'Cocomat, sans-serif', fontWeight: 200, color: '#e8dfc4', fontSize: 9, letterSpacing: 3, whiteSpace: 'nowrap', flex: '0 1 auto', textAlign: 'center', padding: '0 12px' }}>
-          THE LAKE AFFAIR — PINE PRAIRE, 2025
+          {caseLabel}
         </div>
 
         <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexShrink: 0 }}>
@@ -802,6 +804,7 @@ export default function Board() {
               entries={journalEntries}
               timeRemaining={timerSecs}
               onVisit={handleVisit}
+              caseId={caseIdRef.current ?? ''}
             />
           </div>
 

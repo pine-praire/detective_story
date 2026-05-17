@@ -3,8 +3,6 @@
 import { useState } from 'react'
 import { supabase } from '@/lib/supabase'
 
-const CASE_ID = '9449b4d3-8567-42c9-b376-e3a260f15498'
-
 export interface JournalEntry {
   id: string
   entryNumber: number
@@ -28,15 +26,15 @@ interface JournalProps {
   entries: JournalEntry[]
   onVisit: (entry: JournalEntry) => void
   timeRemaining: number
+  caseId: string
 }
 
-export default function Journal({ entries, onVisit, timeRemaining }: JournalProps) {
+export default function Journal({ entries, onVisit, timeRemaining, caseId }: JournalProps) {
   const [code, setCode] = useState('')
   const [visiting, setVisiting] = useState(false)
   const [error, setError] = useState('')
 
   async function handleGo() {
-    // Guard: не пускать если время вышло или уже идёт визит
     if (visiting || timeRemaining <= 0) return
 
     const trimmed = code.trim()
@@ -54,13 +52,13 @@ export default function Journal({ entries, onVisit, timeRemaining }: JournalProp
       let locationData: any = null
 
       if (visitType === 'visit') {
-const { data, error: locErr } = await supabase
-  .from('locations')
-  .select('*')
-  .eq('code', parseInt(trimmed, 10))
-  .maybeSingle()
-if (locErr) console.error('Location lookup by code failed:', locErr)
-locationData = data
+        const { data, error: locErr } = await supabase
+          .from('locations')
+          .select('*')
+          .eq('code', parseInt(trimmed, 10))
+          .maybeSingle()
+        if (locErr) console.error('Location lookup by code failed:', locErr)
+        locationData = data
       } else {
         const { data, error: locErr } = await supabase
           .from('locations')
@@ -99,7 +97,7 @@ locationData = data
       const { data: caseLocData, error: caseLocErr } = await supabase
         .from('case_locations')
         .select('is_active, scene_text')
-        .eq('case_id', CASE_ID)
+        .eq('case_id', caseId)
         .eq('location_id', locationData.id)
         .maybeSingle()
 
@@ -132,7 +130,7 @@ locationData = data
       const { data: charData, error: charErr } = await supabase
         .from('case_characters')
         .select('*, characters(name, photo_url, occupation)')
-        .eq('case_id', CASE_ID)
+        .eq('case_id', caseId)
         .eq('current_location_id', locationData.id)
         .eq('is_active', true)
         .maybeSingle()
@@ -142,13 +140,13 @@ locationData = data
       // ── 5. Найти улику в локации (только при визите) ────────────────────────
       let clueData: any = null
       if (visitType === 'visit') {
-const { data } = await supabase
-  .from('case_clues')
-  .select('*')
-  .eq('case_id', CASE_ID)
-  .eq('found_at_location_id', locationData.id)
-  .maybeSingle()
-clueData = data
+        const { data } = await supabase
+          .from('case_clues')
+          .select('*')
+          .eq('case_id', caseId)
+          .eq('found_at_location_id', locationData.id)
+          .maybeSingle()
+        clueData = data
       }
 
       // ── 6. Собрать текст сцены ─────────────────────────────────────────────
@@ -318,7 +316,6 @@ clueData = data
             background: '#0a0805',
             position: 'relative',
           }}>
-            {/* Left accent line */}
             <div style={{
               position: 'absolute', left: 0, top: 0, bottom: 0, width: 2,
               background: entry.visitType === 'visit'
@@ -326,14 +323,12 @@ clueData = data
                 : 'rgba(74,154,218,0.5)',
             }} />
 
-            {/* Header */}
             <div style={{
               background: '#0d0a06',
               borderBottom: '1px solid rgba(184,134,11,0.15)',
               padding: '10px 16px 10px 20px',
               display: 'flex', alignItems: 'center', gap: 10,
             }}>
-              {/* Badge */}
               <div style={{
                 fontFamily: 'Cocomat, sans-serif', fontWeight: 300,
                 fontSize: 9, letterSpacing: 2, textTransform: 'uppercase',
@@ -344,7 +339,6 @@ clueData = data
                 {entry.visitType === 'visit' ? 'Visit' : 'Call'}
               </div>
 
-              {/* Code/phone — Location — Character */}
               <div style={{
                 fontFamily: 'Remington, monospace',
                 color: '#e8dfc4', fontSize: 14, letterSpacing: 1,
@@ -355,7 +349,6 @@ clueData = data
                 } — {entry.locationName}{entry.characterName ? ` — ${entry.characterName}` : ''}
               </div>
 
-              {/* Cost */}
               <div style={{
                 marginLeft: 'auto', flexShrink: 0,
                 fontFamily: 'Cocomat, sans-serif', fontWeight: 200,
@@ -365,7 +358,6 @@ clueData = data
               </div>
             </div>
 
-            {/* Scene text */}
             <div style={{ padding: '14px 16px 14px 20px', overflow: 'hidden' }}>
               {entry.visitType === 'visit' && entry.characterPhoto && (
                 <img

@@ -3,6 +3,13 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 
+interface Case {
+  id: string
+  title: string
+  year: number
+  city: string
+}
+
 interface Event {
   id: string
   title: string
@@ -10,6 +17,7 @@ interface Event {
   event_date: string
   max_teams: number
   status: string
+  case_id: string | null
 }
 
 interface Team {
@@ -32,17 +40,29 @@ const STATUS_COLORS: Record<string, string> = {
 
 export default function HostPage() {
   const [events, setEvents] = useState<Event[]>([])
+  const [cases, setCases] = useState<Case[]>([])
   const [selectedEvent, setSelectedEvent] = useState<Event | null>(null)
   const [teams, setTeams] = useState<Team[]>([])
   const [view, setView] = useState<'events' | 'new-event' | 'manage'>('events')
-  const [title, setTitle] = useState('')
+  const [selectedCaseId, setSelectedCaseId] = useState('')
   const [description, setDescription] = useState('')
   const [date, setDate] = useState('')
   const [maxTeams, setMaxTeams] = useState('20')
   const [creating, setCreating] = useState(false)
   const [copied, setCopied] = useState<string | null>(null)
 
-  useEffect(() => { loadEvents() }, [])
+  useEffect(() => {
+    loadEvents()
+    loadCases()
+  }, [])
+
+  async function loadCases() {
+    const { data } = await supabase
+      .from('cases')
+      .select('id, title, year, city')
+      .order('title')
+    if (data) setCases(data)
+  }
 
   async function loadEvents() {
     const { data } = await supabase.from('events').select('*').order('event_date', { ascending: false })
@@ -55,10 +75,14 @@ export default function HostPage() {
   }
 
   async function createEvent() {
-    if (!title.trim() || !date) return
+    if (!selectedCaseId || !date) return
+    const selectedCase = cases.find(c => c.id === selectedCaseId)
+    if (!selectedCase) return
+
     setCreating(true)
     const { data, error } = await supabase.from('events').insert({
-      title: title.trim(),
+      title: selectedCase.title,
+      case_id: selectedCaseId,
       description: description.trim() || null,
       event_date: date,
       max_teams: parseInt(maxTeams),
@@ -67,7 +91,7 @@ export default function HostPage() {
     setCreating(false)
     if (!error && data) {
       await loadEvents()
-      setTitle(''); setDescription(''); setDate(''); setMaxTeams('20')
+      setSelectedCaseId(''); setDescription(''); setDate(''); setMaxTeams('20')
       setView('events')
     }
   }
@@ -95,14 +119,6 @@ export default function HostPage() {
     await supabase.from('teams').delete().eq('id', teamId)
     setTeams(prev => prev.filter(t => t.id !== teamId))
   }
-
-  async function deleteEvent(eventId: string, e: React.MouseEvent) {
-  e.stopPropagation()
-  if (!confirm('Delete this event and all its teams?')) return
-  await supabase.from('teams').delete().eq('event_id', eventId)
-  await supabase.from('events').delete().eq('id', eventId)
-  setEvents(prev => prev.filter(ev => ev.id !== eventId))
-}
 
   async function setEventStatus(status: string) {
     if (!selectedEvent) return
@@ -209,87 +225,104 @@ export default function HostPage() {
 
       <div style={{ padding: '48px', maxWidth: 1000, margin: '0 auto' }}>
 
- {/* EVENTS LIST */}
-{view === 'events' && (
-  <div>
-    {sectionDivider('All Events')}
-    {events.length === 0 && (
-      <div style={{ border: '1px solid rgba(184,134,11,0.15)', padding: '48px', textAlign: 'center', fontFamily: 'Ovo, serif', color: '#e8dfc4', fontSize: 14 }}>
-        No events yet. Create one →
-      </div>
-    )}
-    {events.map(ev => (
-      <div
-        key={ev.id}
-        onClick={() => selectEvent(ev)}
-        style={{
-          background: '#0a0805',
-          border: '1px solid rgba(184,134,11,0.15)',
-          borderLeft: `2px solid ${STATUS_COLORS[ev.status] || '#555'}`,
-          padding: '20px 28px', marginBottom: 8, cursor: 'pointer',
-          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-        }}
-        onMouseEnter={e => (e.currentTarget.style.background = '#0d0a06')}
-        onMouseLeave={e => (e.currentTarget.style.background = '#0a0805')}
-      >
-        <div>
-          <div style={{ fontFamily: 'Remington, monospace', color: '#e8dfc4', fontSize: 18, marginBottom: 6 }}>
-            {ev.title}
+        {/* EVENTS LIST */}
+        {view === 'events' && (
+          <div>
+            {sectionDivider('All Events')}
+            {events.length === 0 && (
+              <div style={{ border: '1px solid rgba(184,134,11,0.15)', padding: '48px', textAlign: 'center', fontFamily: 'Ovo, serif', color: '#e8dfc4', fontSize: 14 }}>
+                No events yet. Create one →
+              </div>
+            )}
+            {events.map(ev => (
+              <div
+                key={ev.id}
+                onClick={() => selectEvent(ev)}
+                style={{
+                  background: '#0a0805',
+                  border: '1px solid rgba(184,134,11,0.15)',
+                  borderLeft: `2px solid ${STATUS_COLORS[ev.status] || '#555'}`,
+                  padding: '20px 28px', marginBottom: 8, cursor: 'pointer',
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                }}
+                onMouseEnter={e => (e.currentTarget.style.background = '#0d0a06')}
+                onMouseLeave={e => (e.currentTarget.style.background = '#0a0805')}
+              >
+                <div>
+                  <div style={{ fontFamily: 'Remington, monospace', color: '#e8dfc4', fontSize: 18, marginBottom: 6 }}>
+                    {ev.title}
+                  </div>
+                  {ev.description && (
+                    <div style={{ fontFamily: 'Ovo, serif', color: '#e8dfc4', fontSize: 13, marginBottom: 6, fontStyle: 'italic' }}>
+                      {ev.description}
+                    </div>
+                  )}
+                  <div style={{ fontFamily: 'Cocomat, sans-serif', fontWeight: 200, color: '#e8dfc4', fontSize: 10, letterSpacing: 3 }}>
+                    {ev.event_date} · max {ev.max_teams} teams
+                  </div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  {statusBadge(ev.status)}
+                  <button
+                    onClick={e => {
+                      e.stopPropagation()
+                      if (!confirm('Delete this event and all its teams?')) return
+                      supabase.from('teams').delete().eq('event_id', ev.id).then(() =>
+                        supabase.from('events').delete().eq('id', ev.id).then(() =>
+                          setEvents(prev => prev.filter(x => x.id !== ev.id))
+                        )
+                      )
+                    }}
+                    title="Delete event"
+                    style={{
+                      background: 'none',
+                      border: '1px solid rgba(204,68,68,0.3)',
+                      color: '#cc4444', cursor: 'pointer',
+                      padding: '6px 9px', fontSize: 13, lineHeight: 1,
+                      clipPath: 'polygon(4px 0%, calc(100% - 4px) 0%, 100% 4px, 100% calc(100% - 4px), calc(100% - 4px) 100%, 4px 100%, 0% calc(100% - 4px), 0% 4px)',
+                    }}
+                    onMouseEnter={e => (e.currentTarget.style.background = 'rgba(204,68,68,0.15)')}
+                    onMouseLeave={e => (e.currentTarget.style.background = 'none')}
+                  >
+                    🗑
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
-          {ev.description && (
-            <div style={{ fontFamily: 'Ovo, serif', color: '#e8dfc4', fontSize: 13, marginBottom: 6, fontStyle: 'italic' }}>
-              {ev.description}
-            </div>
-          )}
-          <div style={{ fontFamily: 'Cocomat, sans-serif', fontWeight: 200, color: '#e8dfc4', fontSize: 10, letterSpacing: 3 }}>
-            {ev.event_date} · max {ev.max_teams} teams
-          </div>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          {statusBadge(ev.status)}
-          <button
-            onClick={e => {
-              e.stopPropagation()
-              if (!confirm('Delete this event and all its teams?')) return
-              supabase.from('teams').delete().eq('event_id', ev.id).then(() =>
-                supabase.from('events').delete().eq('id', ev.id).then(() =>
-                  setEvents(prev => prev.filter(x => x.id !== ev.id))
-                )
-              )
-            }}
-            title="Delete event"
-            style={{
-              background: 'none',
-              border: '1px solid rgba(204,68,68,0.3)',
-              color: '#cc4444', cursor: 'pointer',
-              padding: '6px 9px', fontSize: 13, lineHeight: 1,
-              clipPath: 'polygon(4px 0%, calc(100% - 4px) 0%, 100% 4px, 100% calc(100% - 4px), calc(100% - 4px) 100%, 4px 100%, 0% calc(100% - 4px), 0% 4px)',
-            }}
-            onMouseEnter={e => (e.currentTarget.style.background = 'rgba(204,68,68,0.15)')}
-            onMouseLeave={e => (e.currentTarget.style.background = 'none')}
-          >
-            🗑
-          </button>
-        </div>
-      </div>
-    ))}
-  </div>
-)}
+        )}
 
         {/* NEW EVENT */}
         {view === 'new-event' && (
           <div style={{ maxWidth: 560 }}>
             {sectionDivider('New Event')}
             <div style={{ border: '1px solid rgba(184,134,11,0.2)', padding: '40px 44px' }}>
+
+              {/* Case selector */}
               <div style={{ marginBottom: 24 }}>
-                <label style={labelStyle}>Case Title</label>
-                <input type="text" value={title} onChange={e => setTitle(e.target.value)}
-                  placeholder="e.g. The Neptune Affair" style={inputStyle} />
+                <label style={labelStyle}>Case</label>
+                <select
+                  value={selectedCaseId}
+                  onChange={e => setSelectedCaseId(e.target.value)}
+                  style={{
+                    ...inputStyle,
+                    appearance: 'none',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <option value="" style={{ background: '#080603' }}>— Select a case —</option>
+                  {cases.map(c => (
+                    <option key={c.id} value={c.id} style={{ background: '#080603' }}>
+                      {c.title} · {c.city} · {c.year}
+                    </option>
+                  ))}
+                </select>
               </div>
+
               <div style={{ marginBottom: 24 }}>
                 <label style={labelStyle}>Description</label>
                 <textarea value={description} onChange={e => setDescription(e.target.value)}
-                  placeholder="Brief description of the case for participants..."
+                  placeholder="Brief description for participants..."
                   rows={3}
                   style={{ ...inputStyle, resize: 'vertical', lineHeight: 1.7 }} />
               </div>
@@ -301,15 +334,22 @@ export default function HostPage() {
                 <label style={labelStyle}>Max Teams</label>
                 <input type="number" value={maxTeams} onChange={e => setMaxTeams(e.target.value)} style={inputStyle} />
               </div>
-              <button onClick={createEvent} disabled={creating} className="btn-deco" style={{
-                padding: '14px 40px',
-                background: creating ? 'transparent' : '#b8860b',
-                color: creating ? '#b8860b' : '#080603',
-                border: '1px solid #b8860b',
-                cursor: creating ? 'default' : 'pointer',
-                fontFamily: 'Cocomat, sans-serif', fontWeight: 300,
-                fontSize: 11, letterSpacing: 5, textTransform: 'uppercase',
-              }}>
+
+              <button
+                onClick={createEvent}
+                disabled={creating || !selectedCaseId || !date}
+                className="btn-deco"
+                style={{
+                  padding: '14px 40px',
+                  background: (creating || !selectedCaseId || !date) ? 'transparent' : '#b8860b',
+                  color: (creating || !selectedCaseId || !date) ? '#b8860b' : '#080603',
+                  border: '1px solid #b8860b',
+                  cursor: (creating || !selectedCaseId || !date) ? 'default' : 'pointer',
+                  opacity: (!selectedCaseId || !date) ? 0.5 : 1,
+                  fontFamily: 'Cocomat, sans-serif', fontWeight: 300,
+                  fontSize: 11, letterSpacing: 5, textTransform: 'uppercase',
+                }}
+              >
                 {creating ? 'Creating...' : 'Create Event'}
               </button>
             </div>
