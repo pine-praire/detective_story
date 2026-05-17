@@ -54,13 +54,13 @@ export default function Journal({ entries, onVisit, timeRemaining }: JournalProp
       let locationData: any = null
 
       if (visitType === 'visit') {
-        const { data, error: locErr } = await supabase
-          .from('locations')
-          .select('*')
-          .eq('code', parseInt(trimmed, 10))
-          .maybeSingle()
-        if (locErr) console.error('Location lookup by code failed:', locErr)
-        locationData = data
+const { data, error: locErr } = await supabase
+  .from('locations')
+  .select('*')
+  .eq('code', parseInt(trimmed, 10))
+  .maybeSingle()
+if (locErr) console.error('Location lookup by code failed:', locErr)
+locationData = data
       } else {
         const { data, error: locErr } = await supabase
           .from('locations')

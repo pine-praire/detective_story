@@ -115,9 +115,12 @@ export default function Board() {
   const sessionIdRef = useRef<string | null>(null)
   const isRestoringRef = useRef(false)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const boardChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null)
   const boardRef = useRef<HTMLDivElement>(null)
   const ghostRef = useRef<HTMLDivElement | null>(null)
   const dragCardId = useRef<string | null>(null)
+
+  // ─── Init ──────────────────────────────────────────────────────────────────
 
   useEffect(() => {
     async function init() {
@@ -125,7 +128,6 @@ export default function Board() {
       await loadCaseData()
 
       const t = getTeam()
-      console.log('team in init:', t)
       if (t) {
         setTeam(t)
         const sessionId = await findOrCreateSession(t)
@@ -141,6 +143,64 @@ export default function Board() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // ─── Realtime subscription — fires after loading completes ─────────────────
+
+ useEffect(() => {
+  const sessionId = sessionIdRef.current
+  if (!sessionId) return
+
+  const channelName = `board-${sessionId}`
+
+  // Remove existing channel with this name if any
+  const existing = supabase.getChannels().find(c => c.topic === `realtime:${channelName}`)
+  if (existing) {
+    supabase.removeChannel(existing)
+  }
+
+  const channel = supabase
+    .channel(channelName)
+    .on(
+      'postgres_changes',
+      {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'session_board',
+        filter: `session_id=eq.${sessionId}`,
+      },
+      (payload) => {
+        if (isRestoringRef.current) return
+        const data = payload.new as any
+        if (!data) return
+        isRestoringRef.current = true
+        if (data.cards && typeof data.cards === 'object') setBoardCards(data.cards)
+        if (Array.isArray(data.strings)) setStrings(data.strings)
+        if (Array.isArray(data.available_cards) && data.available_cards.length > 0) {
+          setAvailableCards(data.available_cards)
+          ;(window as any).__allCaseCards = [...((window as any).__allCaseCards || []), ...data.available_cards]
+        }
+        if (Array.isArray(data.journal_entries)) {
+          const entries = data.journal_entries as JournalEntry[]
+          setJournalEntries(entries)
+          const visitedIds = new Set(entries.filter(e => e.visitType === 'visit').map(e => e.locationId))
+          if (visitedIds.size > 0) setLocations(prev => prev.map(l => visitedIds.has(l.id) ? { ...l, visited: true } : l))
+        }
+        if (typeof data.timer_secs === 'number' && data.timer_secs > 0) setTimerSecs(data.timer_secs)
+        if (typeof data.hypothesis_count === 'number') setHypothesisCount(data.hypothesis_count)
+        setTimeout(() => { isRestoringRef.current = false }, 150)
+      }
+    )
+    .subscribe()
+
+  boardChannelRef.current = channel
+
+  return () => {
+    supabase.removeChannel(channel)
+    boardChannelRef.current = null
+  }
+}, [loading])
+
+  // ─── Timer ─────────────────────────────────────────────────────────────────
+
   useEffect(() => {
     const id = setInterval(() => {
       if (!isRestoringRef.current) {
@@ -149,6 +209,8 @@ export default function Board() {
     }, 1000)
     return () => clearInterval(id)
   }, [])
+
+  // ─── Debounced save ─────────────────────────────────────────────────────────
 
   useEffect(() => {
     if (isRestoringRef.current || !sessionIdRef.current) return
@@ -159,20 +221,17 @@ export default function Board() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [boardCards, strings, availableCards, journalEntries, hypothesisCount])
 
+  // ─── Session ────────────────────────────────────────────────────────────────
+
   async function findOrCreateSession(t: TeamData): Promise<string | null> {
     try {
-      console.log('team data:', t)
-      console.log('CASE_ID:', CASE_ID)
-
-      const { data: existing, error: findError } = await supabase
+      const { data: existing } = await supabase
         .from('sessions')
         .select('id')
         .eq('login_code', t.code)
         .eq('case_id', CASE_ID)
         .eq('is_active', true)
         .single()
-
-      console.log('find existing:', existing, findError)
 
       if (existing?.id) return existing.id
 
@@ -188,8 +247,6 @@ export default function Board() {
         .select('id')
         .single()
 
-      console.log('insert result:', created, insertError)
-
       if (insertError) { console.error('Session create error:', insertError); return null }
       return created?.id ?? null
     } catch (err) {
@@ -197,6 +254,8 @@ export default function Board() {
       return null
     }
   }
+
+  // ─── Restore ────────────────────────────────────────────────────────────────
 
   async function restoreBoard(sessionId: string) {
     try {
@@ -248,6 +307,8 @@ export default function Board() {
     }
   }
 
+  // ─── Save ───────────────────────────────────────────────────────────────────
+
   const saveSnapshot = useCallback(async () => {
     const sessionId = sessionIdRef.current
     if (!sessionId || isRestoringRef.current) return
@@ -270,6 +331,8 @@ export default function Board() {
     setSaveStatus(error ? 'unsaved' : 'saved')
     if (error) console.error('saveSnapshot:', error)
   }, [])
+
+  // ─── Load case data ─────────────────────────────────────────────────────────
 
   async function loadCaseData() {
     try {
@@ -336,6 +399,8 @@ export default function Board() {
       console.error('loadCaseData:', err)
     }
   }
+
+  // ─── Board actions ──────────────────────────────────────────────────────────
 
   const handleSidebarDragStart = useCallback((cardId: string, e: React.MouseEvent) => {
     if (boardCardsRef.current[cardId]) return
